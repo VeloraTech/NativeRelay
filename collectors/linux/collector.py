@@ -122,6 +122,7 @@ class LinuxCollector(Collector):
         self.health = {"process": "not_started", "filesystem": "not_started", "dropped": 0, "errors": []}
         self._caps = self._initial_capabilities()
         self._fanotify_advanced = False
+        self._fanotify_mode = "unknown"
 
     def _initial_capabilities(self):
         return tuple(Capability(t, CollectorStatus.SUPPORTED if t in (
@@ -140,6 +141,9 @@ class LinuxCollector(Collector):
 
     @property
     def capabilities(self): return self._caps
+
+    @property
+    def fanotify_mode(self): return self._fanotify_mode
 
     @property
     def status(self):
@@ -308,6 +312,7 @@ class LinuxCollector(Collector):
                 self._fanotify_fd = advanced_fd
                 self._sockets.append(advanced_fd)
                 self._fanotify_advanced = True
+                self._fanotify_mode = "filesystem"
                 self.health["filesystem"] = "available"
                 self._set_status(
                     (EventType.FILE_OPENED, EventType.FILE_MODIFIED, EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED),
@@ -348,6 +353,7 @@ class LinuxCollector(Collector):
                 self._fanotify_fd = fid_fd
                 self._sockets.append(fid_fd)
                 self._fanotify_advanced = False
+                self._fanotify_mode = "mount"
                 self.health["filesystem"] = "available"
                 self._set_status(
                     (EventType.FILE_OPENED, EventType.FILE_MODIFIED),
@@ -401,6 +407,7 @@ class LinuxCollector(Collector):
         self._fanotify_fd = basic_fd
         self._sockets.append(basic_fd)
         self._fanotify_advanced = False
+        self._fanotify_mode = "dir-only"
         self.health["filesystem"] = "available"
         self._set_status(
             (EventType.FILE_OPENED, EventType.FILE_MODIFIED),
