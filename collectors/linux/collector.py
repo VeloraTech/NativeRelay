@@ -379,6 +379,37 @@ class LinuxCollector(Collector):
             self.health["errors"].append(f"fanotify_mark {fid_mode_desc} (FAN_MARK_MOUNT) failed: {os.strerror(errno_val)}")
             os.close(fid_fd)
 
+        # Fallback 1.5: filesystem mode without FID flags
+        # Uses FAN_CLASS_NOTIF with FAN_MARK_FILESYSTEM (no FAN_REPORT_FID required, kernel 4.20+)
+        # This monitors the entire filesystem, filtered to scope in userspace
+        fs_open_flags = os.O_RDONLY
+        fs_fd = init(FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK, fs_open_flags)
+        if fs_fd >= 0:
+            mask = FAN_OPEN | FAN_MODIFY | FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO
+            mountpoint = self._mountpoint(self.scope)
+            if mark(fs_fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, mask, -100, os.fsencode(mountpoint)) >= 0:
+                self._fanotify_fd = fs_fd
+                self._sockets.append(fs_fd)
+                self._fanotify_advanced = False
+                self._fanotify_mode = "filesystem-nofid"
+                self.health["filesystem"] = "available"
+                self._set_status(
+                    (EventType.FILE_OPENED, EventType.FILE_MODIFIED, EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED),
+                    CollectorStatus.AVAILABLE,
+                    f"fanotify filesystem notifications (no FID) filtered to {self.scope}"
+                )
+                thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
+                thread.start()
+                self._threads.append(thread)
+                return
+            # Mark failed, close and try next fallback
+            errno_val = ctypes.get_errno()
+            self.health["errors"].append(f"fanotify_mark filesystem-nofid (FAN_MARK_FILESYSTEM) failed: {os.strerror(errno_val)}")
+            os.close(fs_fd)
+        else:
+            errno_val = ctypes.get_errno()
+            self.health["errors"].append(f"fanotify_init filesystem-nofid failed: {os.strerror(errno_val)}")
+
         # Fallback 2: basic mode without FAN_REPORT_FID (no mount/filesystem marking)
         # Uses FAN_CLASS_NOTIF with FAN_MARK_ONLYDIR on the specific directory
         # This only watches the exact directory, not recursive
