@@ -18,8 +18,6 @@ Project scope, design principles, initial event model, and platform research wer
 - [x] Linux integration verification through the Ubuntu 22.04 and 24.04 CI matrix
 - [x] fanotify open/modify attribution validated on WSL2 Linux 6.6 (root)
 
-Phase 2 is complete for the documented event set. The implementation remains pre-release. CN_PROC loss accounting remains best-effort (netlink overrun is detected but kernel-internal queue loss cannot be precisely quantified). File create/delete/rename remain unsupported. NativeRelay does not provide complete audit coverage.
-
 ## Phase 2 — Linux reliability and consumer API: complete
 
 - [x] Process connector loss detection: CN_PROC netlink overrun reported as loss with unknown count
@@ -30,9 +28,15 @@ Phase 2 is complete for the documented event set. The implementation remains pre
 - [x] Integration tests: path filtering unit tests, existing CN_PROC/fanotify integration tests
 - [x] Documentation: updated README, linux-support.md, CLI help
 
-## Phase 3 — Filesystem event coverage
+## Phase 3 — Filesystem event coverage: complete
 
-Research fanotify file-handle event reporting and safe name correlation for create, delete, and rename. Implement only events with verifiable process attribution and documented semantics. Keep unsupported states explicit.
+- [x] File create events (FAN_CREATE): file-handle reporting with process attribution
+- [x] File delete events (FAN_DELETE): file-handle reporting with process attribution
+- [x] File rename events (FAN_MOVE/FAN_RENAME): FAN_MOVED_FROM/FAN_MOVED_TO pairs with metadata
+- [x] Path filtering for new event types
+- [x] Loss reporting for new event types
+- [x] Capability reporting for new event types
+- [x] Documentation updates
 
 ## Phase 4 — Windows research and collector
 

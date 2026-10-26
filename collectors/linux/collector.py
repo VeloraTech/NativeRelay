@@ -37,12 +37,29 @@ FAN_CLASS_NOTIF = 0x00000000
 FAN_NONBLOCK = 0x00000002
 FAN_MARK_ADD = 0x00000001
 FAN_MARK_MOUNT = 0x00000010
+FAN_MARK_FILESYSTEM = 0x00000100
+FAN_MARK_ONLYDIR = 0x00000020
 FAN_MODIFY = 0x00000002
 FAN_OPEN = 0x00000020
+FAN_CREATE = 0x00000100
+FAN_DELETE = 0x00000200
+FAN_DELETE_SELF = 0x00000400
+FAN_MOVE = 0x00000800
+FAN_RENAME = 0x00000800
+FAN_MOVED_FROM = 0x00001000
+FAN_MOVED_TO = 0x00002000
 FAN_Q_OVERFLOW = 0x00004000
+FAN_REPORT_PID = 0x00008000
+FAN_REPORT_FID = 0x00010000
+FAN_REPORT_DFID_NAME = 0x00020000
 FANOTIFY_METADATA_VERSION = 3
 FANOTIFY_METADATA_LEN = 24
 FAN_EVENT_METADATA_FMT = "=IBBHQii"
+
+# fanotify event info types
+FAN_EVENT_INFO_TYPE_FID = 1
+FAN_EVENT_INFO_TYPE_DFID = 2
+FAN_EVENT_INFO_TYPE_DFID_NAME = 3
 
 
 class _PathFilter:
@@ -104,8 +121,16 @@ class LinuxCollector(Collector):
         self._caps = self._initial_capabilities()
 
     def _initial_capabilities(self):
-        return tuple(Capability(t, CollectorStatus.SUPPORTED if t in (EventType.PROCESS_STARTED, EventType.PROCESS_EXITED, EventType.FILE_OPENED, EventType.FILE_MODIFIED) else CollectorStatus.UNSUPPORTED,
-                 "collector has not started" if t in (EventType.PROCESS_STARTED, EventType.PROCESS_EXITED, EventType.FILE_OPENED, EventType.FILE_MODIFIED) else
+        return tuple(Capability(t, CollectorStatus.SUPPORTED if t in (
+            EventType.PROCESS_STARTED, EventType.PROCESS_EXITED,
+            EventType.FILE_OPENED, EventType.FILE_MODIFIED,
+            EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED
+        ) else CollectorStatus.UNSUPPORTED,
+                 "collector has not started" if t in (
+            EventType.PROCESS_STARTED, EventType.PROCESS_EXITED,
+            EventType.FILE_OPENED, EventType.FILE_MODIFIED,
+            EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED
+        ) else
                  "This collector does not infer namespace changes from file content notifications",
                  "host process table" if t.value.startswith("process") else str(self.scope),
                  "kernel PID/TGID" if t.value.startswith("process") else "fanotify event PID") for t in EventType)
@@ -149,7 +174,9 @@ class LinuxCollector(Collector):
         status = CollectorStatus.PERMISSION_DENIED if isinstance(exc, PermissionError) or getattr(exc, "errno", None) in (errno.EPERM, errno.EACCES) else CollectorStatus.UNAVAILABLE
         self.health[subsystem] = status.value
         self.health["errors"].append(f"{subsystem}: {exc}")
-        affected = (EventType.PROCESS_STARTED, EventType.PROCESS_EXITED) if subsystem == "process" else (EventType.FILE_OPENED, EventType.FILE_MODIFIED)
+        affected = (EventType.PROCESS_STARTED, EventType.PROCESS_EXITED) if subsystem == "process" else (
+            EventType.FILE_OPENED, EventType.FILE_MODIFIED, EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED
+        )
         self._caps = tuple(Capability(c.event_type, status if c.event_type in affected else c.status,
                          str(exc) if c.event_type in affected else c.reason, c.scope, c.attribution) for c in self._caps)
 
@@ -260,18 +287,27 @@ class LinuxCollector(Collector):
             init = libc.fanotify_init
             init.argtypes = [ctypes.c_uint, ctypes.c_uint]
             init.restype = ctypes.c_int
-            fd = init(FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK, os.O_RDONLY | os.O_LARGEFILE if hasattr(os, "O_LARGEFILE") else os.O_RDONLY)
+            fd = init(
+                FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK | FAN_REPORT_PID | FAN_REPORT_FID | FAN_REPORT_DFID_NAME,
+                os.O_RDONLY | os.O_LARGEFILE if hasattr(os, "O_LARGEFILE") else os.O_RDONLY
+            )
             if fd < 0: self._raise_errno()
             self._fanotify_fd = fd
             mark = libc.fanotify_mark
             mark.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_uint64, ctypes.c_int, ctypes.c_char_p]
             mark.restype = ctypes.c_int
+            # Use FAN_MARK_FILESYSTEM instead of FAN_MARK_MOUNT to support FAN_CREATE, FAN_DELETE, FAN_MOVE
             mountpoint = self._mountpoint(self.scope)
-            if mark(fd, FAN_MARK_ADD | FAN_MARK_MOUNT, FAN_OPEN | FAN_MODIFY, -100, os.fsencode(mountpoint)) < 0:
+            if mark(fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
+                    FAN_OPEN | FAN_MODIFY | FAN_CREATE | FAN_DELETE | FAN_MOVE, -100, os.fsencode(mountpoint)) < 0:
                 os.close(fd); self._raise_errno()
             self._sockets.append(fd)
             self.health["filesystem"] = "available"
-            self._set_status((EventType.FILE_OPENED, EventType.FILE_MODIFIED), CollectorStatus.AVAILABLE, f"fanotify mount notifications filtered to {self.scope}")
+            self._set_status(
+                (EventType.FILE_OPENED, EventType.FILE_MODIFIED, EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED),
+                CollectorStatus.AVAILABLE,
+                f"fanotify filesystem notifications filtered to {self.scope}"
+            )
             thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
             thread.start(); self._threads.append(thread)
         except OSError as exc:
@@ -319,6 +355,8 @@ class LinuxCollector(Collector):
                     self._record_native_loss("fanotify_queue_overflow", count=None)
                 elif event_fd >= 0:
                     self._handle_file_event(mask, event_fd, pid)
+                else:
+                    self._handle_file_handle_event(mask, pid, data, offset, length, metadata_len)
                 offset += length
             except (ValueError, struct.error) as exc:
                 self.health["errors"].append(f"malformed fanotify event: {exc}")
@@ -327,18 +365,109 @@ class LinuxCollector(Collector):
         if offset < len(data) and len(data) - offset < FANOTIFY_METADATA_LEN:
             self.health["errors"].append("truncated fanotify metadata")
             self._record_native_loss("fanotify_truncated_metadata", count=None)
+
+    def _parse_fan_event_info(self, data, offset, metadata_len):
+        """Parse extended fanotify event info (FID, DFID, DFID_NAME)."""
+        fid = None
+        dfid = None
+        dfid_name = None
+        info_offset = offset + FANOTIFY_METADATA_LEN
+        while info_offset < offset + metadata_len:
+            if info_offset + 4 > offset + metadata_len:
+                break
+            info_type, info_len = struct.unpack_from("=BH", data, info_offset)
+            info_offset += 4
+            if info_offset + info_len > offset + metadata_len:
+                break
+            info_data = data[info_offset:info_offset + info_len]
+            info_offset += info_len
+            if info_type == FAN_EVENT_INFO_TYPE_FID:
+                fid = info_data
+            elif info_type == FAN_EVENT_INFO_TYPE_DFID:
+                dfid = info_data
+            elif info_type == FAN_EVENT_INFO_TYPE_DFID_NAME:
+                # Structure: file_handle + filename (null-terminated)
+                if len(info_data) > 0:
+                    name_end = info_data.rfind(b'\0')
+                    if name_end >= 0:
+                        dfid = info_data[:name_end]
+                        dfid_name = info_data[name_end + 1:].decode(errors='replace')
+                    else:
+                        dfid = info_data
+                        dfid_name = info_data.decode(errors='replace')
+        return fid, dfid, dfid_name
+
+    def _open_by_handle(self, mount_fd, handle_bytes):
+        """Open a file by handle using open_by_handle_at."""
+        libc = ctypes.CDLL(None, use_errno=True)
+        open_by_handle = libc.open_by_handle_at
+        open_by_handle.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+        open_by_handle.restype = ctypes.c_int
+        handle = ctypes.create_string_buffer(handle_bytes)
+        return open_by_handle(mount_fd, handle, os.O_RDONLY | os.O_PATH)
+
+    def _handle_file_handle_event(self, mask, pid, data, offset, length, metadata_len):
+        """Handle file handle-based events (create/delete/rename) using open_by_handle_at."""
+        fid, dfid, dfid_name = self._parse_fan_event_info(data, offset, metadata_len)
+        try:
+            mount_fd = os.open(self._mountpoint(self.scope), os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                # For rename events, we get two events: FAN_MOVED_FROM and FAN_MOVED_TO
+                # FAN_MOVED_FROM gives source DFID + name, FAN_MOVED_TO gives dest DFID + name
+                # For create/delete: DFID + name gives the target
+                if dfid and dfid_name:
+                    fd = self._open_by_handle(mount_fd, dfid + dfid_name.encode())
+                elif fid:
+                    fd = self._open_by_handle(mount_fd, fid)
+                else:
+                    return
+                if fd >= 0:
+                    try:
+                        path = Path(os.readlink(f"/proc/self/fd/{fd}")).resolve(strict=False)
+                        if self._path_filter.matches(path):
+                            self._publish_file_event(mask, pid, path)
+                    finally:
+                        os.close(fd)
+            except (OSError, ValueError) as exc:
+                self.health["errors"].append(f"file handle event resolution: {exc}")
+                self._record_native_loss("fanotify_path_resolution", count=1)
+            finally:
+                os.close(mount_fd)
+        except (OSError, ValueError) as exc:
+            self.health["errors"].append(f"file handle event setup: {exc}")
+            self._record_native_loss("fanotify_path_resolution", count=1)
+    def _publish_file_event(self, mask, pid, path):
+        """Publish a file event based on the mask."""
+        if mask & FAN_OPEN:
+            self._publish(Event(EventType.FILE_OPENED, "linux", self.name,
+                                self._process_info(pid, None), Resource("file", str(path))))
+        if mask & FAN_MODIFY:
+            self._publish(Event(EventType.FILE_MODIFIED, "linux", self.name,
+                                self._process_info(pid, None), Resource("file", str(path))))
+        if mask & FAN_CREATE:
+            self._publish(Event(EventType.FILE_CREATED, "linux", self.name,
+                                self._process_info(pid, None), Resource("file", str(path))))
+        if mask & FAN_DELETE:
+            self._publish(Event(EventType.FILE_DELETED, "linux", self.name,
+                                self._process_info(pid, None), Resource("file", str(path))))
+        if mask & (FAN_MOVED_FROM | FAN_MOVED_TO | FAN_RENAME):
+            # For rename, we emit a single event with both paths in metadata
+            # The actual correlation of from/to is done by the consumer
+            metadata = {}
+            if mask & FAN_MOVED_FROM:
+                metadata["rename_from"] = True
+            if mask & FAN_MOVED_TO:
+                metadata["rename_to"] = True
+            self._publish(Event(EventType.FILE_RENAMED, "linux", self.name,
+                                self._process_info(pid, None), Resource("file", str(path)), metadata=metadata))
+
     def _handle_file_event(self, mask, fd, pid):
         try:
             path = Path(os.readlink(f"/proc/self/fd/{fd}")).resolve(strict=False)
             # Apply path filtering
             if not self._path_filter.matches(path):
                 return
-            if mask & FAN_OPEN:
-                self._publish(Event(EventType.FILE_OPENED, "linux", self.name,
-                                    self._process_info(pid, None), Resource("file", str(path))))
-            if mask & FAN_MODIFY:
-                self._publish(Event(EventType.FILE_MODIFIED, "linux", self.name,
-                                    self._process_info(pid, None), Resource("file", str(path))))
+            self._publish_file_event(mask, pid, path)
         except (OSError, ValueError) as exc:
             self.health["errors"].append(f"file event resolution: {exc}")
             lost = int(bool(mask & FAN_OPEN)) + int(bool(mask & FAN_MODIFY))

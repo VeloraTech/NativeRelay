@@ -35,7 +35,10 @@ class LinuxParserTests(unittest.TestCase):
         collector.scope = Path("/controlled/scope")
         collector._caps = collector._initial_capabilities()
         collector.health = {"errors": []}
-        self.assertEqual(next(c for c in collector.capabilities if c.event_type == EventType.FILE_CREATED).status, CollectorStatus.UNSUPPORTED)
+        # FILE_CREATED, FILE_DELETED, FILE_RENAMED are now supported
+        self.assertEqual(next(c for c in collector.capabilities if c.event_type == EventType.FILE_CREATED).status, CollectorStatus.SUPPORTED)
+        self.assertEqual(next(c for c in collector.capabilities if c.event_type == EventType.FILE_DELETED).status, CollectorStatus.SUPPORTED)
+        self.assertEqual(next(c for c in collector.capabilities if c.event_type == EventType.FILE_RENAMED).status, CollectorStatus.SUPPORTED)
     def test_fanotify_overflow_packet_is_reported_with_sequence(self):
         collector = LinuxCollector.__new__(LinuxCollector)
         collector._publish_lock = threading.Lock()
@@ -114,7 +117,9 @@ class LinuxParserTests(unittest.TestCase):
         self.assertEqual(next(c for c in collector.capabilities if c.event_type == EventType.PROCESS_STARTED).status, CollectorStatus.PERMISSION_DENIED)
         collector._failure("filesystem", PermissionError("denied"))
         self.assertEqual(next(c for c in collector.capabilities if c.event_type == EventType.FILE_OPENED).status, CollectorStatus.PERMISSION_DENIED)
-        self.assertEqual(next(c for c in collector.capabilities if c.event_type == EventType.FILE_CREATED).status, CollectorStatus.UNSUPPORTED)
+        self.assertEqual(next(c for c in collector.capabilities if c.event_type == EventType.FILE_CREATED).status, CollectorStatus.PERMISSION_DENIED)
+        self.assertEqual(next(c for c in collector.capabilities if c.event_type == EventType.FILE_DELETED).status, CollectorStatus.PERMISSION_DENIED)
+        self.assertEqual(next(c for c in collector.capabilities if c.event_type == EventType.FILE_RENAMED).status, CollectorStatus.PERMISSION_DENIED)
 
     def test_path_filter_matches_scope(self):
         from collectors.linux.collector import _PathFilter

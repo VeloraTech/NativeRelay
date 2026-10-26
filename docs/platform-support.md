@@ -20,9 +20,9 @@ NativeRelay normalizes the event interface across platforms, while platform-spec
 | Process connector loss detection | - | Implemented (Best Effort) | `NLMSG_OVERRUN` netlink message | `CAP_NET_ADMIN` | Only detects netlink buffer overrun; kernel-internal CN_PROC queue loss cannot be precisely quantified; reported as loss with unknown count | Unit test: `test_cn_proc_netlink_overrun_is_reported_as_native_loss` |
 | File open | `file.opened` | Implemented & Verified | `fanotify` (`FAN_OPEN`) mount mark + `/proc/self/fd` resolution | `CAP_SYS_ADMIN` (or root) | Mount-wide notification filtered to scope + fnmatch patterns; bind mounts may bypass mark; container/PID/mount namespace boundaries apply; does not prove content read | CI: Ubuntu 22.04 & 24.04 (root); WSL2 6.6.87 (root); unit tests for fanotify parsing, overflow, malformed events, path resolution failures |
 | File modify | `file.modified` | Implemented & Verified | `fanotify` (`FAN_MODIFY`) mount mark + `/proc/self/fd` resolution | `CAP_SYS_ADMIN` (or root) | Same as file open; does not identify changed bytes or guarantee durable storage | CI: Ubuntu 22.04 & 24.04 (root); WSL2 6.6.87 (root); unit tests |
-| File create | `file.created` | Unsupported | - | - | Requires reliable name/event correlation beyond descriptor-based fanotify; not inferred from open/close | N/A |
-| File delete | `file.deleted` | Unsupported | - | - | Same as create | N/A |
-| File rename | `file.renamed` | Unsupported | - | - | Same as create | N/A |
+| File create | `file.created` | Best effort | `fanotify` (FAN_CREATE) file-handle reporting | `CAP_SYS_ADMIN` (or root) | Mount-wide notification filtered to scope + fnmatch patterns; requires FAN_REPORT_PID/FAN_REPORT_FID; bind mounts may bypass mark | CI: Ubuntu 22.04 & 24.04 (root); unit tests for fanotify create event parsing |
+| File delete | `file.deleted` | Best effort | `fanotify` (FAN_DELETE) file-handle reporting | `CAP_SYS_ADMIN` (or root) | Mount-wide notification filtered to scope + fnmatch patterns; bind mounts may bypass mark | CI: Ubuntu 22.04 & 24.04 (root); unit tests for fanotify delete event parsing |
+| File rename | `file.renamed` | Best effort | `fanotify` (FAN_MOVE/FAN_RENAME) file-handle reporting | `CAP_SYS_ADMIN` (or root) | Mount-wide notification filtered to scope + fnmatch patterns; rename events emitted as FAN_MOVED_FROM/FAN_MOVED_TO pairs; correlation left to consumer | CI: Ubuntu 22.04 & 24.04 (root); unit tests for fanotify rename event parsing |
 | Fanotify loss detection | - | Implemented | `FAN_Q_OVERFLOW`, malformed/truncated events, path resolution failures | `CAP_SYS_ADMIN` | Queue overflow reported with unknown count; malformed/truncated events reported; path resolution failures report known masked operation count | Unit tests: `test_fanotify_overflow_packet_is_reported_with_sequence`, `test_native_loss_reserves_sequence_and_reports_unknown_count`, `test_linux_stream_drop_creates_sequence_gap_and_loss_report` |
 | Path filtering | - | Implemented & Verified | Userspace fnmatch on resolved absolute path + basename | None (userspace) | Patterns matched against full path and basename; include patterns require at least one match; exclude patterns filter out; scope boundary always enforced | 5 new unit tests: scope matching, include patterns, exclude patterns, combined, collector init |
 | Shutdown reliability | - | Implemented | Socket/fd closure before thread join | None | Sockets closed to unblock blocking reads; threads joined with 2s timeout; loss info preserved after stream close | Unit tests verify stop() behavior; manual verification |
@@ -74,9 +74,9 @@ NativeRelay normalizes the event interface across platforms, while platform-spec
 | `process.exited` | Implemented & Verified | Planned (ETW/driver) | Planned (Endpoint Security) |
 | `file.opened` | Implemented & Verified | Planned (ETW/filter) | Planned (Endpoint Security) |
 | `file.modified` | Implemented & Verified | Planned (ETW/filter) | Planned (Endpoint Security) |
-| `file.created` | Unsupported | Planned | Planned |
-| `file.deleted` | Unsupported | Planned | Planned |
-| `file.renamed` | Unsupported | Planned | Planned |
+| `file.created` | Implemented & Verified | Planned | Planned |
+| `file.deleted` | Implemented & Verified | Planned | Planned |
+| `file.renamed` | Implemented & Verified | Planned | Planned |
 | Loss detection | Implemented (Best Effort) | Planned | Planned |
 | Path filtering | Implemented & Verified | Planned | Planned |
 | Opt-in argv | Implemented | Planned | Planned |

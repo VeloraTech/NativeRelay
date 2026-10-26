@@ -5,9 +5,9 @@ NativeRelay is a local-first, embeddable operating-system observability layer fo
 
 **System telemetry is currently Linux-supported.** macOS and Windows collectors are future work. NativeRelay reports native observations; it does not identify AI agents, infer file contents, or depend on AgentTrace.
 
-## Phase 2 status
+## Phase 3 status
 
-The Linux collector adds path filtering for file events (`--include-paths`/`--exclude-paths`),
+The Linux collector adds filesystem create, delete, and rename events via fanotify's file-handle reporting (FAN_CREATE, FAN_DELETE, FAN_MOVE). Events are attributed to the responsible process (PID reported via FAN_REPORT_PID) and paths are resolved via file handles (open_by_handle_at). Events are filtered by the selected scope and optional include/exclude patterns. Rename events are emitted as FAN_MOVED_FROM/FAN_MOVED_TO pairs with metadata indicating direction. (`--include-paths`/`--exclude-paths`),
 improved shutdown reliability, and enhanced loss reporting. The process connector
 (`NETLINK_CONNECTOR/CN_PROC`) reports netlink overrun as loss with unknown count;
 fanotify queue overflow and malformed events are similarly reported. File events
@@ -19,7 +19,9 @@ before joining threads to prevent hangs.
 | `process.started`, `process.exited` | Best effort | Kernel fork/leader-exit notifications; short-lived forked processes are included when notifications arrive. A leader exit does not guarantee all threads in its group have stopped. CN_PROC netlink overrun reported as loss. |
 | `file.opened` | Best effort | `fanotify` open event with PID and path for the selected scope, filtered by path patterns. |
 | `file.modified` | Best effort | `fanotify` modification notification; does not report changed bytes or guarantee durable storage. |
-| `file.created`, `file.deleted`, `file.renamed` | Unsupported | Not emitted; no inference from directory watchers. |
+| `file.created` | Best effort | `fanotify` create event with PID and path for the selected scope, filtered by path patterns. |
+| `file.deleted` | Best effort | `fanotify` delete event with PID and path for the selected scope, filtered by path patterns. |
+| `file.renamed` | Best effort | `fanotify` move/rename event with PID and path for the selected scope, filtered by path patterns. |
 
 Capabilities distinguish supported (implemented but not started), available (active), degraded, permission-denied, unavailable, and unsupported states through the capability API/CLI. Stream-full drops are counted exactly; fanotify overflow, malformed events, and path resolution failures are reported with unknown or known loss counts. CN_PROC netlink overrun is reported as loss. Inspect the stream loss ledger and Linux collector status even during receive timeouts. No file contents or environment values are read. Process argv collection is opt-in because arguments can contain secrets.
 
