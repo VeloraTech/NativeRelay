@@ -34,6 +34,8 @@ PROC_EVENT_EXIT = 0x80000000
 PROC_CN_MCAST_LISTEN = 1
 FAN_CLOEXEC = 0x00000001
 FAN_CLASS_NOTIF = 0x00000000
+FAN_CLASS_CONTENT = 0x00000004
+FAN_CLASS_PRE_CONTENT = 0x00000008
 FAN_NONBLOCK = 0x00000002
 FAN_MARK_ADD = 0x00000001
 FAN_MARK_MOUNT = 0x00000010
@@ -292,10 +294,13 @@ class LinuxCollector(Collector):
         mark.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_uint64, ctypes.c_int, ctypes.c_char_p]
         mark.restype = ctypes.c_int
 
+        open_flags = os.O_RDONLY | os.O_LARGEFILE if hasattr(os, "O_LARGEFILE") else os.O_RDONLY
+
         # Try advanced mode first: file-handle reporting for create/delete/rename
+        # Requires FAN_CLASS_CONTENT (not NOTIF) for FAN_REPORT_FID/DFID_NAME
         advanced_fd = init(
-            FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK | FAN_REPORT_PID | FAN_REPORT_FID | FAN_REPORT_DFID_NAME,
-            os.O_RDONLY | os.O_LARGEFILE if hasattr(os, "O_LARGEFILE") else os.O_RDONLY
+            FAN_CLOEXEC | FAN_CLASS_CONTENT | FAN_NONBLOCK | FAN_REPORT_PID | FAN_REPORT_FID | FAN_REPORT_DFID_NAME,
+            open_flags
         )
         if advanced_fd >= 0:
             mask = FAN_OPEN | FAN_MODIFY | FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO
@@ -316,27 +321,65 @@ class LinuxCollector(Collector):
             # Mark failed, close and try fallback
             os.close(advanced_fd)
 
-        # Fallback: try basic mode with multiple flag combinations
-        # Some kernels/filesystems don't support FAN_REPORT_PID or FAN_REPORT_FID
+        # Fallback 1: basic mode with FAN_REPORT_FID (required for FAN_MARK_MOUNT)
+        # Uses FAN_CLASS_CONTENT for FAN_REPORT_FID, with/without FAN_REPORT_PID
+        fid_flag_combinations = [
+            (FAN_CLOEXEC | FAN_CLASS_CONTENT | FAN_NONBLOCK | FAN_REPORT_PID | FAN_REPORT_FID, "with FAN_REPORT_PID+FID"),
+            (FAN_CLOEXEC | FAN_CLASS_CONTENT | FAN_NONBLOCK | FAN_REPORT_FID, "with FAN_REPORT_FID only"),
+        ]
+
+        fid_fd = -1
+        fid_mode_desc = ""
+        for flags, desc in fid_flag_combinations:
+            fd = init(flags, open_flags)
+            if fd >= 0:
+                fid_fd = fd
+                fid_mode_desc = desc
+                break
+            errno_val = ctypes.get_errno()
+            self.health["errors"].append(f"fanotify_init {desc} failed: {os.strerror(errno_val)}")
+
+        if fid_fd >= 0:
+            mask = FAN_OPEN | FAN_MODIFY
+            mountpoint = self._mountpoint(self.scope)
+            if mark(fid_fd, FAN_MARK_ADD | FAN_MARK_MOUNT, mask, -100, os.fsencode(mountpoint)) >= 0:
+                self._fanotify_fd = fid_fd
+                self._sockets.append(fid_fd)
+                self._fanotify_advanced = False
+                self.health["filesystem"] = "available"
+                self._set_status(
+                    (EventType.FILE_OPENED, EventType.FILE_MODIFIED),
+                    CollectorStatus.AVAILABLE,
+                    f"fanotify mount notifications filtered to {self.scope} (create/delete/rename unsupported on this filesystem)"
+                )
+                self._set_status(
+                    (EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED),
+                    CollectorStatus.UNAVAILABLE,
+                    "filesystem does not support file-handle reporting (FAN_REPORT_DFID_NAME)"
+                )
+                thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
+                thread.start()
+                self._threads.append(thread)
+                return
+            # Mark failed, close and try next fallback
+            os.close(fid_fd)
+
+        # Fallback 2: basic mode without FAN_REPORT_FID (no mount/filesystem marking)
+        # Uses FAN_CLASS_NOTIF with FAN_MARK_ONLYDIR on the specific directory
+        # This only watches the exact directory, not recursive
         basic_flag_combinations = [
-            # Try with FAN_REPORT_PID first (requires kernel 4.19+)
-            (FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK | FAN_REPORT_PID, "with FAN_REPORT_PID"),
-            # Fallback: minimal flags (no FAN_REPORT_PID)
-            (FAN_CLOEXEC | FAN_NONBLOCK, "minimal (no FAN_REPORT_PID)"),
+            (FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK | FAN_REPORT_PID, "with FAN_REPORT_PID (dir-only)"),
+            (FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK, "minimal (dir-only, no FAN_REPORT_PID)"),
         ]
 
         basic_fd = -1
         basic_mode_desc = ""
         for flags, desc in basic_flag_combinations:
-            fd = init(
-                flags,
-                os.O_RDONLY  # Avoid O_LARGEFILE which may cause issues on some kernels
-            )
+            fd = init(flags, open_flags)
             if fd >= 0:
                 basic_fd = fd
                 basic_mode_desc = desc
                 break
-            # Log the failure and try next combination
             errno_val = ctypes.get_errno()
             self.health["errors"].append(f"fanotify_init {desc} failed: {os.strerror(errno_val)}")
 
@@ -345,10 +388,10 @@ class LinuxCollector(Collector):
             return
 
         mask = FAN_OPEN | FAN_MODIFY
-        mountpoint = self._mountpoint(self.scope)
-        if mark(basic_fd, FAN_MARK_ADD | FAN_MARK_MOUNT, mask, -100, os.fsencode(mountpoint)) < 0:
+        # Mark the specific directory only (not recursive, no mount marking)
+        if mark(basic_fd, FAN_MARK_ADD | FAN_MARK_ONLYDIR, mask, -100, os.fsencode(str(self.scope))) < 0:
             os.close(basic_fd)
-            self._failure("filesystem", OSError(ctypes.get_errno(), "fanotify_mark failed"))
+            self._failure("filesystem", OSError(ctypes.get_errno(), "fanotify_mark failed (directory-only)"))
             return
 
         self._fanotify_fd = basic_fd
@@ -358,12 +401,12 @@ class LinuxCollector(Collector):
         self._set_status(
             (EventType.FILE_OPENED, EventType.FILE_MODIFIED),
             CollectorStatus.AVAILABLE,
-            f"fanotify mount notifications filtered to {self.scope} (create/delete/rename unsupported on this filesystem)"
+            f"fanotify directory-only notifications for {self.scope} (non-recursive, create/delete/rename unsupported)"
         )
         self._set_status(
             (EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED),
             CollectorStatus.UNAVAILABLE,
-            "filesystem does not support file-handle reporting (FAN_REPORT_FID/DFID_NAME)"
+            "directory-only mode does not support create/delete/rename events"
         )
         thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
         thread.start()
