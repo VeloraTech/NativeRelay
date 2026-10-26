@@ -7,7 +7,7 @@ import io
 from zipfile import ZIP_DEFLATED, ZipFile
 
 NAME = "nativerelay"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 def get_requires_for_build_wheel(config_settings=None):
     return []
@@ -29,7 +29,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
             wheel.writestr(path.as_posix(), content)
             record.append(_record_row(path.as_posix(), content))
         metadata = f"{dist}/METADATA"
-        content = b"Metadata-Version: 2.1\nName: nativerelay\nVersion: 0.2.0\nRequires-Python: >=3.11\nSummary: Local-first normalized native OS telemetry\n\n"
+        content = f"Metadata-Version: 2.1\nName: nativerelay\nVersion: {VERSION}\nRequires-Python: >=3.11\nSummary: Local-first normalized native OS telemetry\n\n".encode()
         wheel.writestr(metadata, content); record.append(_record_row(metadata, content))
         wheel_file = f"{dist}/WHEEL"
         content = b"Wheel-Version: 1.0\nGenerator: nativerelay.build\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
