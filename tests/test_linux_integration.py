@@ -67,18 +67,32 @@ class LinuxCollectorIntegrationTests(unittest.TestCase):
                 import sys
                 print(f"fanotify_mode: {collector.fanotify_mode}", file=sys.stderr)
                 print(f"health: {collector.status}", file=sys.stderr)
+                
+                mode = collector.fanotify_mode
                 target = Path(temp) / "controlled.txt"
+                
+                # In dir-only mode, we monitor the directory itself, not files within
+                # Creating/modifying files in the dir triggers CREATE/MODIFY on the directory
+                if mode == "dir-only":
+                    watch_path = Path(temp)
+                    expected_types = {EventType.FILE_CREATED, EventType.FILE_MODIFIED}
+                else:
+                    watch_path = target
+                    expected_types = {EventType.FILE_OPENED, EventType.FILE_MODIFIED}
+                
                 with target.open("w", encoding="utf-8") as handle:
                     handle.write("controlled test metadata only\n")
+                
                 seen = set()
                 deadline = time.monotonic() + 5
-                while time.monotonic() < deadline and not {EventType.FILE_OPENED, EventType.FILE_MODIFIED}.issubset(seen):
+                while time.monotonic() < deadline and not expected_types.issubset(seen):
                     try: event = stream.receive(timeout=max(0, deadline - time.monotonic()))
                     except TimeoutError: break
-                    if event.resource and Path(event.resource.path) == target and event.process.pid == os.getpid():
+                    if event.resource and Path(event.resource.path) == watch_path and event.process.pid == os.getpid():
                         seen.add(event.type)
-                self.assertIn(EventType.FILE_OPENED, seen)
-                self.assertIn(EventType.FILE_MODIFIED, seen)
+                
+                for et in expected_types:
+                    self.assertIn(et, seen, f"Missing {et} for {watch_path} in mode {mode}")
             finally:
                 collector.stop()
 
