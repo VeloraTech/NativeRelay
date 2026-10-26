@@ -316,20 +316,41 @@ class LinuxCollector(Collector):
             # Mark failed, close and try fallback
             os.close(advanced_fd)
 
-        # Fallback: basic mode without file-handle reporting (no create/delete/rename)
-        basic_fd = init(
-            FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK | FAN_REPORT_PID,
-            os.O_RDONLY | os.O_LARGEFILE if hasattr(os, "O_LARGEFILE") else os.O_RDONLY
-        )
+        # Fallback: try basic mode with multiple flag combinations
+        # Some kernels/filesystems don't support FAN_REPORT_PID or FAN_REPORT_FID
+        basic_flag_combinations = [
+            # Try with FAN_REPORT_PID first (requires kernel 4.19+)
+            (FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK | FAN_REPORT_PID, "with FAN_REPORT_PID"),
+            # Fallback: minimal flags (no FAN_REPORT_PID)
+            (FAN_CLOEXEC | FAN_NONBLOCK, "minimal (no FAN_REPORT_PID)"),
+        ]
+
+        basic_fd = -1
+        basic_mode_desc = ""
+        for flags, desc in basic_flag_combinations:
+            fd = init(
+                flags,
+                os.O_RDONLY  # Avoid O_LARGEFILE which may cause issues on some kernels
+            )
+            if fd >= 0:
+                basic_fd = fd
+                basic_mode_desc = desc
+                break
+            # Log the failure and try next combination
+            errno_val = ctypes.get_errno()
+            self.health["errors"].append(f"fanotify_init {desc} failed: {os.strerror(errno_val)}")
+
         if basic_fd < 0:
-            self._failure("filesystem", OSError(ctypes.get_errno(), "fanotify_init failed"))
+            self._failure("filesystem", OSError(ctypes.get_errno(), "fanotify_init failed: all flag combinations failed"))
             return
+
         mask = FAN_OPEN | FAN_MODIFY
         mountpoint = self._mountpoint(self.scope)
         if mark(basic_fd, FAN_MARK_ADD | FAN_MARK_MOUNT, mask, -100, os.fsencode(mountpoint)) < 0:
             os.close(basic_fd)
             self._failure("filesystem", OSError(ctypes.get_errno(), "fanotify_mark failed"))
             return
+
         self._fanotify_fd = basic_fd
         self._sockets.append(basic_fd)
         self._fanotify_advanced = False
