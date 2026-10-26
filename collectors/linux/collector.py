@@ -319,6 +319,8 @@ class LinuxCollector(Collector):
                 self._threads.append(thread)
                 return
             # Mark failed, close and try fallback
+            errno_val = ctypes.get_errno()
+            self.health["errors"].append(f"fanotify_mark advanced (FAN_MARK_FILESYSTEM) failed: {os.strerror(errno_val)}")
             os.close(advanced_fd)
 
         # Fallback 1: basic mode with FAN_REPORT_FID (required for FAN_MARK_MOUNT)
@@ -362,6 +364,8 @@ class LinuxCollector(Collector):
                 self._threads.append(thread)
                 return
             # Mark failed, close and try next fallback
+            errno_val = ctypes.get_errno()
+            self.health["errors"].append(f"fanotify_mark {fid_mode_desc} (FAN_MARK_MOUNT) failed: {os.strerror(errno_val)}")
             os.close(fid_fd)
 
         # Fallback 2: basic mode without FAN_REPORT_FID (no mount/filesystem marking)
