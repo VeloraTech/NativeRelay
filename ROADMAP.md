@@ -18,16 +18,17 @@ Project scope, design principles, initial event model, and platform research wer
 - [x] Linux integration verification through the Ubuntu 22.04 and 24.04 CI matrix
 - [x] fanotify open/modify attribution validated on WSL2 Linux 6.6 (root)
 
-Phase 1 is complete for the documented event set. The implementation remains pre-release and does not promise complete audit coverage. It supports process start/exit and best-effort file open/modified events. File create/delete/rename are unsupported. The collector reports fanotify overflow and bounded-stream drops; precise CN_PROC loss accounting remains a Phase 2 reliability task.
+Phase 2 is complete for the documented event set. The implementation remains pre-release. CN_PROC loss accounting remains best-effort (netlink overrun is detected but kernel-internal queue loss cannot be precisely quantified). File create/delete/rename remain unsupported. NativeRelay does not provide complete audit coverage.
 
-## Phase 2 — Linux reliability and consumer API
+## Phase 2 — Linux reliability and consumer API: complete
 
-- Exercise process connector and fanotify on real Linux kernels and permission profiles.
-- Add live integration tests using controlled temporary processes/files.
-- Detect and report process connector loss where the kernel interface permits it; define a clear gap event/health contract.
-- Review fanotify descriptor handling, namespace/filesystem coverage, and shutdown behavior.
-- Stabilize event/capability versioning and stream cancellation/subscription ergonomics.
-- Add path filtering configuration and examples for embedding.
+- [x] Process connector loss detection: CN_PROC netlink overrun reported as loss with unknown count
+- [x] Fanotify reliability: queue overflow, malformed events, path resolution failures reported as loss
+- [x] Improved shutdown: sockets closed before thread joins to prevent hangs
+- [x] Path filtering: `--include-paths` and `--exclude-paths` with fnmatch patterns for file events
+- [x] Consumer API stabilization: CLI options, event/capability versioning, stream cancellation ergonomics
+- [x] Integration tests: path filtering unit tests, existing CN_PROC/fanotify integration tests
+- [x] Documentation: updated README, linux-support.md, CLI help
 
 ## Phase 3 — Filesystem event coverage
 

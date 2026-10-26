@@ -5,18 +5,23 @@ NativeRelay is a local-first, embeddable operating-system observability layer fo
 
 **System telemetry is currently Linux-supported.** macOS and Windows collectors are future work. NativeRelay reports native observations; it does not identify AI agents, infer file contents, or depend on AgentTrace.
 
-## Phase 1 status
+## Phase 2 status
 
-The Linux collector uses the kernel process connector (`NETLINK_CONNECTOR/CN_PROC`) for process fork/exit events and `fanotify` for process-attributed file open/write-close notifications. Filesystem observation requires elevated privileges, is scoped to a user-selected directory (kernel monitoring is mounted-filesystem-wide, then filtered), and is best effort. Process events are independently available only when the kernel permits connector subscription.
+The Linux collector adds path filtering for file events (`--include-paths`/`--exclude-paths`),
+improved shutdown reliability, and enhanced loss reporting. The process connector
+(`NETLINK_CONNECTOR/CN_PROC`) reports netlink overrun as loss with unknown count;
+fanotify queue overflow and malformed events are similarly reported. File events
+support fnmatch-style include/exclude patterns. Collector shutdown closes sockets
+before joining threads to prevent hangs.
 
 | Event | Linux status | Notes |
 |---|---|---|
-| `process.started`, `process.exited` | Best effort | Kernel fork/leader-exit notifications; short-lived forked processes are included when notifications arrive. A leader exit does not guarantee all threads in its group have stopped. |
-| `file.opened` | Best effort | `fanotify` open event with PID and path for the selected scope. |
+| `process.started`, `process.exited` | Best effort | Kernel fork/leader-exit notifications; short-lived forked processes are included when notifications arrive. A leader exit does not guarantee all threads in its group have stopped. CN_PROC netlink overrun reported as loss. |
+| `file.opened` | Best effort | `fanotify` open event with PID and path for the selected scope, filtered by path patterns. |
 | `file.modified` | Best effort | `fanotify` modification notification; does not report changed bytes or guarantee durable storage. |
 | `file.created`, `file.deleted`, `file.renamed` | Unsupported | Not emitted; no inference from directory watchers. |
 
-Capabilities distinguish supported (implemented but not started), available (active), degraded, permission-denied, unavailable, and unsupported states through the capability API/CLI. Stream-full drops are counted exactly; fanotify overflow is reported with an unknown loss count. Inspect the stream loss ledger and Linux collector status even during receive timeouts. CN_PROC does not expose precise loss accounting in Phase 1. No file contents or environment values are read. Process argv collection is opt-in because arguments can contain secrets.
+Capabilities distinguish supported (implemented but not started), available (active), degraded, permission-denied, unavailable, and unsupported states through the capability API/CLI. Stream-full drops are counted exactly; fanotify overflow, malformed events, and path resolution failures are reported with unknown or known loss counts. CN_PROC netlink overrun is reported as loss. Inspect the stream loss ledger and Linux collector status even during receive timeouts. No file contents or environment values are read. Process argv collection is opt-in because arguments can contain secrets.
 
 ## Run locally
 
@@ -27,11 +32,13 @@ python -m nativerelay.cli capabilities --scope /path/to/workspace
 python -m nativerelay.cli observe --scope /path/to/workspace
 python -m nativerelay.cli observe --scope /path/to/workspace --json
 nativerelay run --format json --scope /path/to/workspace
+# Path filtering (Phase 2):
+nativerelay run --format json --scope /path/to/workspace --include-paths "*.py" --exclude-paths "test_*"
 ```
 
 `nativerelay run --format json` is the installed console command for machine consumers. It writes compact JSON Lines to stdout: normalized event objects retain the event schema, while control records use `record_type` values `nativerelay.status` and `nativerelay.loss` (both schema version 1). Status records report startup, capability/health changes, and shutdown; loss records include the loss generation and cumulative loss ledger. Human diagnostics go to stderr. The command uses the current directory as its default scope and exits cleanly on Ctrl-C or SIGTERM. Exit codes are 0 for clean shutdown, 2 for invalid arguments, 3 when collection cannot start or no source is available, and 4 for runtime failure. Loss is reported, never recovered.
 
-The process connector may be unavailable depending on kernel configuration and privilege; subscribing to its netlink multicast group generally requires root or `CAP_NET_ADMIN`. `fanotify` mount monitoring requires `CAP_SYS_ADMIN`; the CLI reports each degraded state. Use least privilege that satisfies the kernel on the target system. `--include-command` opts into process argument collection and should be used with care.
+The process connector may be unavailable depending on kernel configuration and privilege; subscribing to its netlink multicast group generally requires root or `CAP_NET_ADMIN`. `fanotify` mount monitoring requires `CAP_SYS_ADMIN`; the CLI reports each degraded state. Use least privilege that satisfies the kernel on the target system. `--include-command` opts into process argument collection and should be used with care. Path filtering uses fnmatch patterns matched against the full path and basename.
 
 ## Embed
 
@@ -73,6 +80,6 @@ The event contract does not require consumers to import `collectors.linux`; futu
 
 ## Project status
 
-Phase 1 is complete for the documented event set and remains pre-release. Controlled CN_PROC process-lifecycle and fanotify file-event integration tests passed in the privileged GitHub Actions Linux workflow; the workflow targets Ubuntu 22.04 and 24.04. The fanotify smoke test also passed under root in WSL2 on Linux 6.6.87. WSL could not validate CN_PROC because the distro uses a non-initial PID namespace. Process connector loss accounting is a known follow-up, and NativeRelay does not provide complete audit coverage. See the capability and limitations documentation before use.
+Phase 2 is complete for the documented event set and remains pre-release. Path filtering for file events (`--include-paths`/`--exclude-paths`), improved shutdown reliability (socket closure before thread join), and enhanced loss reporting (CN_PROC netlink overrun, fanotify overflow, malformed events, path resolution failures) are implemented. Controlled CN_PROC process-lifecycle and fanotify file-event integration tests passed in the privileged GitHub Actions Linux workflow; the workflow targets Ubuntu 22.04 and 24.04. The fanotify smoke test also passed under root in WSL2 on Linux 6.6.87. WSL could not validate CN_PROC because the distro uses a non-initial PID namespace. Precise CN_PROC loss accounting remains best-effort (netlink overrun is detected but kernel-internal queue loss cannot be precisely quantified). NativeRelay does not provide complete audit coverage. See the capability and limitations documentation before use.
 
 MIT licensed. No cloud service, account, network connection, or remote telemetry is required.

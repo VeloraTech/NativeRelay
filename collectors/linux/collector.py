@@ -8,6 +8,7 @@ from __future__ import annotations
 import ctypes
 import errno
 from dataclasses import replace
+import fnmatch
 import os
 import platform
 import re
@@ -17,6 +18,7 @@ import struct
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 from nativerelay.collector import Collector
 from nativerelay.model import Capability, CollectorStatus, Event, EventType, Process, Resource
@@ -42,14 +44,56 @@ FANOTIFY_METADATA_VERSION = 3
 FANOTIFY_METADATA_LEN = 24
 FAN_EVENT_METADATA_FMT = "=IBBHQii"
 
+
+class _PathFilter:
+    """Path filter supporting include/exclude patterns with fnmatch semantics."""
+
+    def __init__(self, scope: Path, include_patterns: Optional[list[str]] = None,
+                 exclude_patterns: Optional[list[str]] = None):
+        self.scope = scope
+        self.include_patterns = include_patterns or []
+        self.exclude_patterns = exclude_patterns or []
+
+    def matches(self, path: Path) -> bool:
+        """Check if path matches the filter criteria."""
+        # Path must be within scope
+        try:
+            path.relative_to(self.scope)
+        except ValueError:
+            return False
+
+        # If include patterns specified, path must match at least one
+        if self.include_patterns:
+            matched = False
+            for pattern in self.include_patterns:
+                if fnmatch.fnmatch(str(path), pattern) or fnmatch.fnmatch(path.name, pattern):
+                    matched = True
+                    break
+            if not matched:
+                return False
+
+        # Path must not match any exclude pattern
+        for pattern in self.exclude_patterns:
+            if fnmatch.fnmatch(str(path), pattern) or fnmatch.fnmatch(path.name, pattern):
+                return False
+
+        return True
+
+
 class LinuxCollector(Collector):
     name = "linux-kernel"
-    def __init__(self, scope: str, *, include_command: bool = False):
+
+    def __init__(self, scope: str, *, include_command: bool = False,
+                 include_paths: Optional[list[str]] = None,
+                 exclude_paths: Optional[list[str]] = None):
         if platform.system() != "Linux":
             raise OSError("LinuxCollector is available only on Linux")
         self.scope = Path(scope).resolve(strict=True)
-        if not self.scope.is_dir(): raise ValueError("scope must be an existing directory")
+        if not self.scope.is_dir():
+            raise ValueError("scope must be an existing directory")
         self.include_command = include_command
+        # Path filtering for file events
+        self._path_filter = _PathFilter(self.scope, include_paths, exclude_paths)
         self._stream = None
         self._sockets = []
         self._threads = []
@@ -286,18 +330,25 @@ class LinuxCollector(Collector):
     def _handle_file_event(self, mask, fd, pid):
         try:
             path = Path(os.readlink(f"/proc/self/fd/{fd}")).resolve(strict=False)
-            if path != self.scope and self.scope not in path.parents: return
+            # Apply path filtering
+            if not self._path_filter.matches(path):
+                return
             if mask & FAN_OPEN:
-                self._publish(Event(EventType.FILE_OPENED, "linux", self.name, self._process_info(pid, None), Resource("file", str(path))))
+                self._publish(Event(EventType.FILE_OPENED, "linux", self.name,
+                                    self._process_info(pid, None), Resource("file", str(path))))
             if mask & FAN_MODIFY:
-                self._publish(Event(EventType.FILE_MODIFIED, "linux", self.name, self._process_info(pid, None), Resource("file", str(path))))
+                self._publish(Event(EventType.FILE_MODIFIED, "linux", self.name,
+                                    self._process_info(pid, None), Resource("file", str(path))))
         except (OSError, ValueError) as exc:
             self.health["errors"].append(f"file event resolution: {exc}")
             lost = int(bool(mask & FAN_OPEN)) + int(bool(mask & FAN_MODIFY))
-            if lost: self._record_native_loss("fanotify_path_resolution", count=lost)
+            if lost:
+                self._record_native_loss("fanotify_path_resolution", count=lost)
         finally:
-            try: os.close(fd)
-            except OSError: pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
     def _record_native_loss(self, reason, *, count):
         """Record detected native loss and reserve a collector sequence marker."""

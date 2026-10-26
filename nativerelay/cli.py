@@ -32,23 +32,43 @@ def main(argv=None):
 
     observe = commands.add_parser("observe", help="stream process events and scoped file open/write events")
     observe.add_argument("--scope", required=True, help="existing directory to include in file events")
+    observe.add_argument("--include-paths", action="append", default=[], metavar="PATTERN",
+                         help="fnmatch pattern for paths to include (can be repeated)")
+    observe.add_argument("--exclude-paths", action="append", default=[], metavar="PATTERN",
+                         help="fnmatch pattern for paths to exclude (can be repeated)")
     observe.add_argument("--json", action="store_true", help="emit one JSON event per line")
     observe.add_argument("--include-command", action="store_true", help="include argv (may contain sensitive data)")
 
     capabilities = commands.add_parser("capabilities", help="show collector capabilities for a scope")
     capabilities.add_argument("--scope", required=True)
+    capabilities.add_argument("--include-paths", action="append", default=[], metavar="PATTERN",
+                              help="fnmatch pattern for paths to include (can be repeated)")
+    capabilities.add_argument("--exclude-paths", action="append", default=[], metavar="PATTERN",
+                              help="fnmatch pattern for paths to exclude (can be repeated)")
 
     run = commands.add_parser("run", help="stream versioned JSONL records for machine consumers")
     run.add_argument("--format", choices=("json",), default="json", help="output format (currently: json/JSONL)")
     run.add_argument("--scope", default=os.getcwd(), help="directory scope for file events (default: current directory)")
+    run.add_argument("--include-paths", action="append", default=[], metavar="PATTERN",
+                     help="fnmatch pattern for paths to include (can be repeated)")
+    run.add_argument("--exclude-paths", action="append", default=[], metavar="PATTERN",
+                     help="fnmatch pattern for paths to exclude (can be repeated)")
     run.add_argument("--include-command", action="store_true", help="include argv (may contain sensitive data)")
 
     args = parser.parse_args(argv)
     if args.command == "run":
-        return _run_json(args.scope, include_command=args.include_command)
+        return _run_json(args.scope,
+                         include_command=args.include_command,
+                         include_paths=args.include_paths or None,
+                         exclude_paths=args.exclude_paths or None)
 
     try:
-        collector = LinuxCollector(args.scope, include_command=getattr(args, "include_command", False))
+        collector = LinuxCollector(
+            args.scope,
+            include_command=getattr(args, "include_command", False),
+            include_paths=getattr(args, "include_paths", None) or None,
+            exclude_paths=getattr(args, "exclude_paths", None) or None,
+        )
     except (OSError, ValueError) as exc:
         print(f"nativerelay: {exc}", file=sys.stderr)
         return EXIT_COLLECTOR_UNAVAILABLE
@@ -88,7 +108,8 @@ def main(argv=None):
         collector.stop()
 
 
-def _run_json(scope, *, include_command=False, collector_factory=None, stdout=None, stderr=None):
+def _run_json(scope, *, include_command=False, include_paths=None, exclude_paths=None,
+              collector_factory=None, stdout=None, stderr=None):
     """Run JSONL event streaming; injectable dependencies keep lifecycle testable."""
     output = stdout if stdout is not None else sys.stdout
     diagnostics = stderr if stderr is not None else sys.stderr
@@ -118,7 +139,8 @@ def _run_json(scope, *, include_command=False, collector_factory=None, stdout=No
     try:
         factory = collector_factory or LinuxCollector
         try:
-            collector = factory(scope, include_command=include_command)
+            collector = factory(scope, include_command=include_command,
+                               include_paths=include_paths, exclude_paths=exclude_paths)
         except Exception as exc:
             _diagnostic(diagnostics, f"collector initialization failed: {exc}")
             writer.control("nativerelay.status", state="failed", platform="linux",

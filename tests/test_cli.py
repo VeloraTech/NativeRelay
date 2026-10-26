@@ -13,7 +13,8 @@ from nativerelay.stream import EventStream
 class FakeCollector:
     name = "fake-linux"
 
-    def __init__(self, scope, *, include_command=False, mode="event"):
+    def __init__(self, scope, *, include_command=False, mode="event",
+                 include_paths=None, exclude_paths=None):
         self.scope = scope
         self.mode = mode
         self.stream = None
@@ -67,8 +68,9 @@ class CliTests(unittest.TestCase):
         stdout, stderr = io.StringIO(), io.StringIO()
         made = []
 
-        def factory(scope, *, include_command=False):
-            collector = FakeCollector(scope, include_command=include_command, mode=mode)
+        def factory(scope, *, include_command=False, include_paths=None, exclude_paths=None):
+            collector = FakeCollector(scope, include_command=include_command, mode=mode,
+                                      include_paths=include_paths, exclude_paths=exclude_paths)
             made.append(collector)
             return collector
 

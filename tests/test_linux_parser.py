@@ -116,4 +116,57 @@ class LinuxParserTests(unittest.TestCase):
         self.assertEqual(next(c for c in collector.capabilities if c.event_type == EventType.FILE_OPENED).status, CollectorStatus.PERMISSION_DENIED)
         self.assertEqual(next(c for c in collector.capabilities if c.event_type == EventType.FILE_CREATED).status, CollectorStatus.UNSUPPORTED)
 
+    def test_path_filter_matches_scope(self):
+        from collectors.linux.collector import _PathFilter
+        scope = Path("/workspace")
+        filter = _PathFilter(scope, None, None)
+        self.assertTrue(filter.matches(Path("/workspace/file.txt")))
+        self.assertTrue(filter.matches(Path("/workspace/src/main.py")))
+        self.assertFalse(filter.matches(Path("/other/file.txt")))
+
+    def test_path_filter_include_patterns(self):
+        from collectors.linux.collector import _PathFilter
+        scope = Path("/workspace")
+        filter = _PathFilter(scope, include_patterns=["*.py"], exclude_patterns=None)
+        self.assertTrue(filter.matches(Path("/workspace/main.py")))
+        self.assertTrue(filter.matches(Path("/workspace/src/main.py")))
+        self.assertFalse(filter.matches(Path("/workspace/file.txt")))
+        self.assertFalse(filter.matches(Path("/workspace/data.json")))
+
+    def test_path_filter_exclude_patterns(self):
+        from collectors.linux.collector import _PathFilter
+        scope = Path("/workspace")
+        filter = _PathFilter(scope, include_patterns=None, exclude_patterns=["*.tmp", "*.log"])
+        self.assertTrue(filter.matches(Path("/workspace/main.py")))
+        self.assertTrue(filter.matches(Path("/workspace/src/main.py")))
+        self.assertFalse(filter.matches(Path("/workspace/temp.tmp")))
+        self.assertFalse(filter.matches(Path("/workspace/debug.log")))
+
+    def test_path_filter_include_and_exclude(self):
+        from collectors.linux.collector import _PathFilter
+        scope = Path("/workspace")
+        filter = _PathFilter(scope, include_patterns=["*.py", "*.txt"], exclude_patterns=["test_*"])
+        self.assertTrue(filter.matches(Path("/workspace/main.py")))
+        self.assertTrue(filter.matches(Path("/workspace/readme.txt")))
+        self.assertFalse(filter.matches(Path("/workspace/test_main.py")))
+        self.assertFalse(filter.matches(Path("/workspace/data.json")))
+
+    def test_collector_initializes_path_filter(self):
+        from collectors.linux.collector import _PathFilter
+        collector = LinuxCollector.__new__(LinuxCollector)
+        collector.scope = Path("/test/scope")
+        collector.include_command = False
+        collector._path_filter = _PathFilter(collector.scope, ["*.py"], ["test_*"])
+        self.assertTrue(collector._path_filter.matches(Path("/test/scope/main.py")))
+        self.assertFalse(collector._path_filter.matches(Path("/test/scope/test_main.py")))
+
+    def test_path_filter_outside_scope(self):
+        from collectors.linux.collector import _PathFilter
+        scope = Path("/workspace")
+        filter = _PathFilter(scope, None, None)
+        # Paths clearly outside scope
+        self.assertFalse(filter.matches(Path("/other/file.txt")))
+        self.assertFalse(filter.matches(Path("/etc/passwd")))
+
+
 if __name__ == "__main__": unittest.main()
