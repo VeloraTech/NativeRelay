@@ -494,7 +494,7 @@ class LinuxCollector(Collector):
             self._failure("filesystem", OSError(ctypes.get_errno(), "fanotify_init failed: all flag combinations failed"))
             return
 
-        mask = FAN_OPEN | FAN_MODIFY
+        mask = FAN_OPEN | FAN_MODIFY | FAN_CREATE
         # Mark the specific directory only (not recursive, no mount marking)
         if mark(basic_fd, FAN_MARK_ADD | FAN_MARK_ONLYDIR, mask, -100, os.fsencode(str(self.scope))) < 0:
             errno_val = ctypes.get_errno()
@@ -509,14 +509,14 @@ class LinuxCollector(Collector):
         self._fanotify_mode = "dir-only"
         self.health["filesystem"] = "available"
         self._set_status(
-            (EventType.FILE_OPENED, EventType.FILE_MODIFIED),
+            (EventType.FILE_OPENED, EventType.FILE_MODIFIED, EventType.FILE_CREATED),
             CollectorStatus.AVAILABLE,
-            f"fanotify directory-only notifications for {self.scope} (non-recursive, create/delete/rename unsupported)"
+            f"fanotify directory-only notifications for {self.scope} (non-recursive, delete/rename unsupported)"
         )
         self._set_status(
-            (EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED),
+            (EventType.FILE_DELETED, EventType.FILE_RENAMED),
             CollectorStatus.UNAVAILABLE,
-            "directory-only mode does not support create/delete/rename events"
+            "directory-only mode does not support delete/rename events"
         )
         thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
         thread.start()
@@ -570,7 +570,7 @@ class LinuxCollector(Collector):
                         self._handle_file_handle_event(mask, pid, data, offset, length, metadata_len)
                 else:
                     # Basic mode: only FAN_OPEN and FAN_MODIFY with event_fd >= 0
-                    if event_fd >= 0 and (mask & (FAN_OPEN | FAN_MODIFY)):
+                    if event_fd >= 0 and (mask & (FAN_OPEN | FAN_MODIFY | FAN_CREATE)):
                         self._handle_file_event(mask, event_fd, pid)
                     elif event_fd < 0:
                         # Unexpected file-handle event in basic mode; report loss

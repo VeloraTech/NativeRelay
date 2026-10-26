@@ -80,8 +80,12 @@ class LinuxCollectorIntegrationTests(unittest.TestCase):
                     watch_path = target
                     expected_types = {EventType.FILE_OPENED, EventType.FILE_MODIFIED}
                 
+                # Write file (triggers CREATE on dir in dir-only mode)
                 with target.open("w", encoding="utf-8") as handle:
                     handle.write("controlled test metadata only\n")
+                # Read file (triggers OPEN on dir in dir-only mode, or MODIFY)
+                with target.open("r", encoding="utf-8") as handle:
+                    handle.read()
                 
                 seen = set()
                 deadline = time.monotonic() + 5
