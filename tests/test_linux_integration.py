@@ -63,6 +63,10 @@ class LinuxCollectorIntegrationTests(unittest.TestCase):
             try:
                 file_cap = next(c for c in collector.capabilities if c.event_type == EventType.FILE_OPENED)
                 require_capability(self, file_cap, "fanotify")
+                # Debug: print fanotify mode and health
+                import sys
+                print(f"fanotify_mode: {collector.fanotify_mode}", file=sys.stderr)
+                print(f"health: {collector.status}", file=sys.stderr)
                 target = Path(temp) / "controlled.txt"
                 with target.open("w", encoding="utf-8") as handle:
                     handle.write("controlled test metadata only\n")
