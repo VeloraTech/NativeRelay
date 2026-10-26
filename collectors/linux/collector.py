@@ -296,10 +296,11 @@ class LinuxCollector(Collector):
             mark = libc.fanotify_mark
             mark.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_uint64, ctypes.c_int, ctypes.c_char_p]
             mark.restype = ctypes.c_int
-            # Use FAN_MARK_FILESYSTEM instead of FAN_MARK_MOUNT to support FAN_CREATE, FAN_DELETE, FAN_MOVE.
+            # Use FAN_MARK_FILESYSTEM instead of FAN_MARK_MOUNT to support FAN_CREATE, FAN_DELETE, FAN_MOVED_FROM, FAN_MOVED_TO.
             # FAN_MARK_FILESYSTEM requires a path *on* the filesystem (the scope), not the mount point.
-            if mark(fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
-                    FAN_OPEN | FAN_MODIFY | FAN_CREATE | FAN_DELETE | FAN_MOVE, -100, os.fsencode(str(self.scope))) < 0:
+            # Use FAN_MOVED_FROM | FAN_MOVED_TO for rename events (FAN_MOVE/FAN_RENAME is deprecated).
+            mask = FAN_OPEN | FAN_MODIFY | FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO
+            if mark(fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, mask, -100, os.fsencode(str(self.scope))) < 0:
                 os.close(fd); self._raise_errno()
             self._sockets.append(fd)
             self.health["filesystem"] = "available"
@@ -308,10 +309,6 @@ class LinuxCollector(Collector):
                 CollectorStatus.AVAILABLE,
                 f"fanotify filesystem notifications filtered to {self.scope}"
             )
-            thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
-            thread.start(); self._threads.append(thread)
-        except OSError as exc:
-            self._failure("filesystem", exc)
             thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
             thread.start(); self._threads.append(thread)
         except OSError as exc:
