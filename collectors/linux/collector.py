@@ -379,6 +379,63 @@ class LinuxCollector(Collector):
             self.health["errors"].append(f"fanotify_mark {fid_mode_desc} (FAN_MARK_MOUNT) failed: {os.strerror(errno_val)}")
             os.close(fid_fd)
 
+        # Fallback 1.5a: try FAN_MARK_MOUNT with scope path directly (not mountpoint)
+        # Some kernels might accept marking a directory as mount with FAN_CLASS_CONTENT
+        fs2_open_flags = os.O_RDONLY
+        fs2_fd = init(FAN_CLOEXEC | FAN_CLASS_CONTENT | FAN_NONBLOCK, fs2_open_flags)
+        if fs2_fd >= 0:
+            mask = FAN_OPEN | FAN_MODIFY | FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO
+            self.health["errors"].append(f"fanotify_mark mount-scope trying scope: {self.scope}")
+            if mark(fs2_fd, FAN_MARK_ADD | FAN_MARK_MOUNT, mask, -100, os.fsencode(str(self.scope))) >= 0:
+                self._fanotify_fd = fs2_fd
+                self._sockets.append(fs2_fd)
+                self._fanotify_advanced = False
+                self._fanotify_mode = "mount-scope"
+                self.health["filesystem"] = "available"
+                self._set_status(
+                    (EventType.FILE_OPENED, EventType.FILE_MODIFIED, EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED),
+                    CollectorStatus.AVAILABLE,
+                    f"fanotify mount notifications (scope) filtered to {self.scope}"
+                )
+                thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
+                thread.start()
+                self._threads.append(thread)
+                return
+            errno_val = ctypes.get_errno()
+            self.health["errors"].append(f"fanotify_mark mount-scope (FAN_MARK_MOUNT) failed: {os.strerror(errno_val)}")
+            os.close(fs2_fd)
+        else:
+            errno_val = ctypes.get_errno()
+            self.health["errors"].append(f"fanotify_init mount-scope failed: {os.strerror(errno_val)}")
+
+        # Fallback 1.5b: try FAN_CLASS_NOTIF with FAN_MARK_FILESYSTEM on scope path
+        fs3_open_flags = os.O_RDONLY
+        fs3_fd = init(FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK, fs3_open_flags)
+        if fs3_fd >= 0:
+            mask = FAN_OPEN | FAN_MODIFY | FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO
+            self.health["errors"].append(f"fanotify_mark fs-scope trying scope: {self.scope}")
+            if mark(fs3_fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, mask, -100, os.fsencode(str(self.scope))) >= 0:
+                self._fanotify_fd = fs3_fd
+                self._sockets.append(fs3_fd)
+                self._fanotify_advanced = False
+                self._fanotify_mode = "filesystem-scope"
+                self.health["filesystem"] = "available"
+                self._set_status(
+                    (EventType.FILE_OPENED, EventType.FILE_MODIFIED, EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED),
+                    CollectorStatus.AVAILABLE,
+                    f"fanotify filesystem notifications (scope) filtered to {self.scope}"
+                )
+                thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
+                thread.start()
+                self._threads.append(thread)
+                return
+            errno_val = ctypes.get_errno()
+            self.health["errors"].append(f"fanotify_mark fs-scope (FAN_MARK_FILESYSTEM) failed: {os.strerror(errno_val)}")
+            os.close(fs3_fd)
+        else:
+            errno_val = ctypes.get_errno()
+            self.health["errors"].append(f"fanotify_init fs-scope failed: {os.strerror(errno_val)}")
+
         # Fallback 1.5: filesystem mode without FID flags
         # Uses FAN_CLASS_NOTIF with FAN_MARK_FILESYSTEM (no FAN_REPORT_FID required, kernel 4.20+)
         # This monitors the entire filesystem, filtered to scope in userspace
@@ -387,6 +444,7 @@ class LinuxCollector(Collector):
         if fs_fd >= 0:
             mask = FAN_OPEN | FAN_MODIFY | FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO
             mountpoint = self._mountpoint(self.scope)
+            self.health["errors"].append(f"fanotify_mark filesystem-nofid trying mountpoint: {mountpoint}")
             if mark(fs_fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, mask, -100, os.fsencode(mountpoint)) >= 0:
                 self._fanotify_fd = fs_fd
                 self._sockets.append(fs_fd)
