@@ -119,6 +119,7 @@ class LinuxCollector(Collector):
         self._sequence = 0
         self.health = {"process": "not_started", "filesystem": "not_started", "dropped": 0, "errors": []}
         self._caps = self._initial_capabilities()
+        self._fanotify_advanced = False
 
     def _initial_capabilities(self):
         return tuple(Capability(t, CollectorStatus.SUPPORTED if t in (
@@ -282,37 +283,70 @@ class LinuxCollector(Collector):
         self._publish(Event(typ, "linux", self.name, self._process_info(pid, ppid), metadata=metadata or {}))
 
     def _start_filesystem(self):
-        try:
-            libc = ctypes.CDLL(None, use_errno=True)
-            init = libc.fanotify_init
-            init.argtypes = [ctypes.c_uint, ctypes.c_uint]
-            init.restype = ctypes.c_int
-            fd = init(
-                FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK | FAN_REPORT_PID | FAN_REPORT_FID | FAN_REPORT_DFID_NAME,
-                os.O_RDONLY | os.O_LARGEFILE if hasattr(os, "O_LARGEFILE") else os.O_RDONLY
-            )
-            if fd < 0: self._raise_errno()
-            self._fanotify_fd = fd
-            mark = libc.fanotify_mark
-            mark.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_uint64, ctypes.c_int, ctypes.c_char_p]
-            mark.restype = ctypes.c_int
-            # Use FAN_MARK_FILESYSTEM instead of FAN_MARK_MOUNT to support FAN_CREATE, FAN_DELETE, FAN_MOVED_FROM, FAN_MOVED_TO.
-            # FAN_MARK_FILESYSTEM requires a path *on* the filesystem (the scope), not the mount point.
-            # Use FAN_MOVED_FROM | FAN_MOVED_TO for rename events (FAN_MOVE/FAN_RENAME is deprecated).
+        """Initialize fanotify with fallback for filesystems without file-handle support."""
+        libc = ctypes.CDLL(None, use_errno=True)
+        init = libc.fanotify_init
+        init.argtypes = [ctypes.c_uint, ctypes.c_uint]
+        init.restype = ctypes.c_int
+        mark = libc.fanotify_mark
+        mark.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_uint64, ctypes.c_int, ctypes.c_char_p]
+        mark.restype = ctypes.c_int
+
+        # Try advanced mode first: file-handle reporting for create/delete/rename
+        advanced_fd = init(
+            FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK | FAN_REPORT_PID | FAN_REPORT_FID | FAN_REPORT_DFID_NAME,
+            os.O_RDONLY | os.O_LARGEFILE if hasattr(os, "O_LARGEFILE") else os.O_RDONLY
+        )
+        if advanced_fd >= 0:
             mask = FAN_OPEN | FAN_MODIFY | FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO
-            if mark(fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, mask, -100, os.fsencode(str(self.scope))) < 0:
-                os.close(fd); self._raise_errno()
-            self._sockets.append(fd)
-            self.health["filesystem"] = "available"
-            self._set_status(
-                (EventType.FILE_OPENED, EventType.FILE_MODIFIED, EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED),
-                CollectorStatus.AVAILABLE,
-                f"fanotify filesystem notifications filtered to {self.scope}"
-            )
-            thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
-            thread.start(); self._threads.append(thread)
-        except OSError as exc:
-            self._failure("filesystem", exc)
+            if mark(advanced_fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, mask, -100, os.fsencode(str(self.scope))) >= 0:
+                self._fanotify_fd = advanced_fd
+                self._sockets.append(advanced_fd)
+                self._fanotify_advanced = True
+                self.health["filesystem"] = "available"
+                self._set_status(
+                    (EventType.FILE_OPENED, EventType.FILE_MODIFIED, EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED),
+                    CollectorStatus.AVAILABLE,
+                    f"fanotify filesystem notifications filtered to {self.scope}"
+                )
+                thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
+                thread.start()
+                self._threads.append(thread)
+                return
+            # Mark failed, close and try fallback
+            os.close(advanced_fd)
+
+        # Fallback: basic mode without file-handle reporting (no create/delete/rename)
+        basic_fd = init(
+            FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK | FAN_REPORT_PID,
+            os.O_RDONLY | os.O_LARGEFILE if hasattr(os, "O_LARGEFILE") else os.O_RDONLY
+        )
+        if basic_fd < 0:
+            self._failure("filesystem", OSError(ctypes.get_errno(), "fanotify_init failed"))
+            return
+        mask = FAN_OPEN | FAN_MODIFY
+        mountpoint = self._mountpoint(self.scope)
+        if mark(basic_fd, FAN_MARK_ADD | FAN_MARK_MOUNT, mask, -100, os.fsencode(mountpoint)) < 0:
+            os.close(basic_fd)
+            self._failure("filesystem", OSError(ctypes.get_errno(), "fanotify_mark failed"))
+            return
+        self._fanotify_fd = basic_fd
+        self._sockets.append(basic_fd)
+        self._fanotify_advanced = False
+        self.health["filesystem"] = "available"
+        self._set_status(
+            (EventType.FILE_OPENED, EventType.FILE_MODIFIED),
+            CollectorStatus.AVAILABLE,
+            f"fanotify mount notifications filtered to {self.scope} (create/delete/rename unsupported on this filesystem)"
+        )
+        self._set_status(
+            (EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED),
+            CollectorStatus.UNAVAILABLE,
+            "filesystem does not support file-handle reporting (FAN_REPORT_FID/DFID_NAME)"
+        )
+        thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
+        thread.start()
+        self._threads.append(thread)
 
     @staticmethod
     def _raise_errno():
@@ -354,10 +388,19 @@ class LinuxCollector(Collector):
                 if version != FANOTIFY_METADATA_VERSION or metadata_len < FANOTIFY_METADATA_LEN or metadata_len > length: raise ValueError("unsupported fanotify metadata version")
                 if mask & FAN_Q_OVERFLOW:
                     self._record_native_loss("fanotify_queue_overflow", count=None)
-                elif event_fd >= 0:
-                    self._handle_file_event(mask, event_fd, pid)
+                elif self._fanotify_advanced:
+                    # Advanced mode: file-handle events have event_fd == -1 (FAN_NOFD)
+                    if event_fd >= 0:
+                        self._handle_file_event(mask, event_fd, pid)
+                    else:
+                        self._handle_file_handle_event(mask, pid, data, offset, length, metadata_len)
                 else:
-                    self._handle_file_handle_event(mask, pid, data, offset, length, metadata_len)
+                    # Basic mode: only FAN_OPEN and FAN_MODIFY with event_fd >= 0
+                    if event_fd >= 0 and (mask & (FAN_OPEN | FAN_MODIFY)):
+                        self._handle_file_event(mask, event_fd, pid)
+                    elif event_fd < 0:
+                        # Unexpected file-handle event in basic mode; report loss
+                        self._record_native_loss("fanotify_unexpected_handle_event", count=None)
                 offset += length
             except (ValueError, struct.error) as exc:
                 self.health["errors"].append(f"malformed fanotify event: {exc}")
