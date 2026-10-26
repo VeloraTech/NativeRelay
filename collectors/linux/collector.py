@@ -298,14 +298,17 @@ class LinuxCollector(Collector):
         mark.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_uint64, ctypes.c_int, ctypes.c_char_p]
         mark.restype = ctypes.c_int
 
-        open_flags = os.O_RDONLY | os.O_LARGEFILE if hasattr(os, "O_LARGEFILE") else os.O_RDONLY
-
         # Try advanced mode first: file-handle reporting for create/delete/rename
         # Requires FAN_CLASS_CONTENT (not NOTIF) for FAN_REPORT_FID/DFID_NAME
+        # Use O_LARGEFILE for advanced mode (original behavior)
+        advanced_open_flags = os.O_RDONLY | os.O_LARGEFILE if hasattr(os, "O_LARGEFILE") else os.O_RDONLY
         advanced_fd = init(
             FAN_CLOEXEC | FAN_CLASS_CONTENT | FAN_NONBLOCK | FAN_REPORT_PID | FAN_REPORT_FID | FAN_REPORT_DFID_NAME,
-            open_flags
+            advanced_open_flags
         )
+        if advanced_fd < 0:
+            errno_val = ctypes.get_errno()
+            self.health["errors"].append(f"fanotify_init advanced (FAN_CLASS_CONTENT+PID+FID+DFID_NAME) failed: {os.strerror(errno_val)}")
         if advanced_fd >= 0:
             mask = FAN_OPEN | FAN_MODIFY | FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO
             if mark(advanced_fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, mask, -100, os.fsencode(str(self.scope))) >= 0:
@@ -330,6 +333,8 @@ class LinuxCollector(Collector):
 
         # Fallback 1: basic mode with FAN_REPORT_FID (required for FAN_MARK_MOUNT)
         # Uses FAN_CLASS_CONTENT for FAN_REPORT_FID, with/without FAN_REPORT_PID
+        # Use plain O_RDONLY for fallback modes (avoid O_LARGEFILE issues)
+        fid_open_flags = os.O_RDONLY
         fid_flag_combinations = [
             (FAN_CLOEXEC | FAN_CLASS_CONTENT | FAN_NONBLOCK | FAN_REPORT_PID | FAN_REPORT_FID, "with FAN_REPORT_PID+FID"),
             (FAN_CLOEXEC | FAN_CLASS_CONTENT | FAN_NONBLOCK | FAN_REPORT_FID, "with FAN_REPORT_FID only"),
@@ -338,7 +343,7 @@ class LinuxCollector(Collector):
         fid_fd = -1
         fid_mode_desc = ""
         for flags, desc in fid_flag_combinations:
-            fd = init(flags, open_flags)
+            fd = init(flags, fid_open_flags)
             if fd >= 0:
                 fid_fd = fd
                 fid_mode_desc = desc
@@ -377,15 +382,18 @@ class LinuxCollector(Collector):
         # Fallback 2: basic mode without FAN_REPORT_FID (no mount/filesystem marking)
         # Uses FAN_CLASS_NOTIF with FAN_MARK_ONLYDIR on the specific directory
         # This only watches the exact directory, not recursive
+        # Use plain O_RDONLY for fallback modes
+        basic_open_flags = os.O_RDONLY
         basic_flag_combinations = [
             (FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK | FAN_REPORT_PID, "with FAN_REPORT_PID (dir-only)"),
             (FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK, "minimal (dir-only, no FAN_REPORT_PID)"),
+            (FAN_CLOEXEC | FAN_NONBLOCK, "minimal (no class, no FAN_REPORT_PID)"),
         ]
 
         basic_fd = -1
         basic_mode_desc = ""
         for flags, desc in basic_flag_combinations:
-            fd = init(flags, open_flags)
+            fd = init(flags, basic_open_flags)
             if fd >= 0:
                 basic_fd = fd
                 basic_mode_desc = desc
@@ -400,6 +408,8 @@ class LinuxCollector(Collector):
         mask = FAN_OPEN | FAN_MODIFY
         # Mark the specific directory only (not recursive, no mount marking)
         if mark(basic_fd, FAN_MARK_ADD | FAN_MARK_ONLYDIR, mask, -100, os.fsencode(str(self.scope))) < 0:
+            errno_val = ctypes.get_errno()
+            self.health["errors"].append(f"fanotify_mark {basic_mode_desc} (FAN_MARK_ONLYDIR) failed: {os.strerror(errno_val)}")
             os.close(basic_fd)
             self._failure("filesystem", OSError(ctypes.get_errno(), "fanotify_mark failed (directory-only)"))
             return
