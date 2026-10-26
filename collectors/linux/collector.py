@@ -486,6 +486,7 @@ class LinuxCollector(Collector):
             if fd >= 0:
                 basic_fd = fd
                 basic_mode_desc = desc
+                self.health["errors"].append(f"fanotify_init {desc} succeeded (fd={fd})")
                 break
             errno_val = ctypes.get_errno()
             self.health["errors"].append(f"fanotify_init {desc} failed: {os.strerror(errno_val)}")
@@ -496,9 +497,11 @@ class LinuxCollector(Collector):
 
         mask = FAN_OPEN | FAN_MODIFY | FAN_CREATE
         # Mark the specific directory only (not recursive, no mount marking)
-        if mark(basic_fd, FAN_MARK_ADD | FAN_MARK_ONLYDIR, mask, -100, os.fsencode(str(self.scope))) < 0:
+        scope_path = os.fsencode(str(self.scope))
+        self.health["errors"].append(f"fanotify_mark {basic_mode_desc} (FAN_MARK_ONLYDIR) trying path: {scope_path!r}")
+        if mark(basic_fd, FAN_MARK_ADD | FAN_MARK_ONLYDIR, mask, -100, scope_path) < 0:
             errno_val = ctypes.get_errno()
-            self.health["errors"].append(f"fanotify_mark {basic_mode_desc} (FAN_MARK_ONLYDIR) failed: {os.strerror(errno_val)}")
+            self.health["errors"].append(f"fanotify_mark {basic_mode_desc} (FAN_MARK_ONLYDIR) failed: {os.strerror(errno_val)} (errno={errno_val})")
             os.close(basic_fd)
             self._failure("filesystem", OSError(ctypes.get_errno(), "fanotify_mark failed (directory-only)"))
             return
