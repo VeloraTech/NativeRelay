@@ -557,6 +557,8 @@ class LinuxCollector(Collector):
             except OSError:
                 if not self._stop.is_set(): self._failure("filesystem", OSError("fanotify descriptor closed"))
                 return
+            if data:
+                self.health["errors"].append(f"fanotify_loop: read {len(data)} bytes")
             self._parse_fanotify_data(data)
 
     def _parse_fanotify_data(self, data):
@@ -576,6 +578,7 @@ class LinuxCollector(Collector):
                         self._handle_file_handle_event(mask, pid, data, offset, length, metadata_len)
                 else:
                     # Basic mode: only FAN_OPEN and FAN_MODIFY with event_fd >= 0
+                    self.health["errors"].append(f"fanotify_parse: mask={mask:#x} fd={event_fd} pid={pid} advanced={self._fanotify_advanced}")
                     if event_fd >= 0 and (mask & (FAN_OPEN | FAN_MODIFY)):
                         self._handle_file_event(mask, event_fd, pid)
                     elif event_fd < 0:
@@ -688,8 +691,10 @@ class LinuxCollector(Collector):
     def _handle_file_event(self, mask, fd, pid):
         try:
             path = Path(os.readlink(f"/proc/self/fd/{fd}")).resolve(strict=False)
+            self.health["errors"].append(f"handle_file_event: mask={mask:#x} fd={fd} pid={pid} resolved_path={path} scope={self.scope}")
             # Apply path filtering
             if not self._path_filter.matches(path):
+                self.health["errors"].append(f"handle_file_event: path {path} filtered out by path filter")
                 return
             self._publish_file_event(mask, pid, path)
         except (OSError, ValueError) as exc:
