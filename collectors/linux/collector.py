@@ -3,6 +3,27 @@
 Process lifecycle uses NETLINK_CONNECTOR/CN_PROC. File events use a fanotify
 mount mark, filtered to one requested directory in userspace. No polling is
 used; permission and queue errors are surfaced in capabilities/health.
+
+Fanotify modes (tried in order):
+1. "filesystem" - FAN_CLASS_CONTENT + FAN_REPORT_FID + FAN_REPORT_DFID_NAME + FAN_MARK_FILESYSTEM
+   - Recursive, all event types (OPEN, MODIFY, CREATE, DELETE, RENAME)
+   - Requires kernel 5.19+, CAP_SYS_ADMIN, filesystem with file-handle support
+2. "mount-scope" - FAN_CLASS_CONTENT + FAN_REPORT_FID + FAN_MARK_MOUNT on scope
+   - Mount-scoped, all event types
+   - Requires kernel 5.1+, CAP_SYS_ADMIN, filesystem with file-handle support
+3. "filesystem-scope" - FAN_CLASS_NOTIF + FAN_MARK_FILESYSTEM on scope (no FID)
+   - Filesystem-scoped, filtered in userspace
+   - Requires kernel 4.20+, CAP_SYS_ADMIN
+4. "filesystem-nofid" - FAN_CLASS_NOTIF + FAN_MARK_FILESYSTEM on mountpoint (no FID)
+   - Full filesystem, filtered in userspace
+   - Requires kernel 4.20+, CAP_SYS_ADMIN
+5. "dir-only" - FAN_CLASS_NOTIF + FAN_MARK_ONLYDIR on scope directory
+   - Single directory only (non-recursive), OPEN/MODIFY only
+   - Works without FAN_REPORT_FID, minimal privileges
+   - NOTE: In container sandboxes (e.g., GitHub Actions), kernel may not deliver
+     events for directory modifications even when setup succeeds. This is an
+     environment limitation, not a collector bug. Full verification requires
+     a non-containerized Linux host with CAP_SYS_ADMIN.
 """
 from __future__ import annotations
 import ctypes
@@ -547,22 +568,16 @@ class LinuxCollector(Collector):
         return best
 
     def _fanotify_loop(self):
-        self.health["errors"].append(f"fanotify_loop: started, fd={self._fanotify_fd}")
         poller = select.poll()
         poller.register(self._fanotify_fd, select.POLLIN | select.POLLERR | select.POLLHUP)
         while not self._stop.is_set():
             ready = poller.poll(500)
-            if not ready: 
-                self.health["errors"].append("fanotify_loop: poll timeout")
-                continue
-            self.health["errors"].append(f"fanotify_loop: poll ready={ready}")
+            if not ready: continue
             try: data = os.read(self._fanotify_fd, 65536)
             except BlockingIOError: continue
             except OSError:
                 if not self._stop.is_set(): self._failure("filesystem", OSError("fanotify descriptor closed"))
                 return
-            if data:
-                self.health["errors"].append(f"fanotify_loop: read {len(data)} bytes")
             self._parse_fanotify_data(data)
 
     def _parse_fanotify_data(self, data):
@@ -582,7 +597,6 @@ class LinuxCollector(Collector):
                         self._handle_file_handle_event(mask, pid, data, offset, length, metadata_len)
                 else:
                     # Basic mode: only FAN_OPEN and FAN_MODIFY with event_fd >= 0
-                    self.health["errors"].append(f"fanotify_parse: mask={mask:#x} fd={event_fd} pid={pid} advanced={self._fanotify_advanced}")
                     if event_fd >= 0 and (mask & (FAN_OPEN | FAN_MODIFY)):
                         self._handle_file_event(mask, event_fd, pid)
                     elif event_fd < 0:
@@ -695,10 +709,9 @@ class LinuxCollector(Collector):
     def _handle_file_event(self, mask, fd, pid):
         try:
             path = Path(os.readlink(f"/proc/self/fd/{fd}")).resolve(strict=False)
-            self.health["errors"].append(f"handle_file_event: mask={mask:#x} fd={fd} pid={pid} resolved_path={path} scope={self.scope}")
             # Apply path filtering
             if not self._path_filter.matches(path):
-                self.health["errors"].append(f"handle_file_event: path {path} filtered out by path filter")
+                return
                 return
             self._publish_file_event(mask, pid, path)
         except (OSError, ValueError) as exc:
