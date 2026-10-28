@@ -97,12 +97,18 @@ class LinuxCollectorIntegrationTests(unittest.TestCase):
                         handle.read()
                 
                 seen = set()
+                all_events = []
                 deadline = time.monotonic() + 5
                 while time.monotonic() < deadline and not expected_types.issubset(seen):
                     try: event = stream.receive(timeout=max(0, deadline - time.monotonic()))
                     except TimeoutError: break
+                    if event.resource:
+                        all_events.append((event.type, event.resource.path, event.process.pid))
+                        print(f"DEBUG: event={event.type} path={event.resource.path} pid={event.process.pid} watch_path={watch_path} current_pid={os.getpid()}", file=sys.stderr)
                     if event.resource and Path(event.resource.path) == watch_path and event.process.pid == os.getpid():
                         seen.add(event.type)
+                if not expected_types.issubset(seen):
+                    print(f"DEBUG: All received events: {all_events}", file=sys.stderr)
                 
                 for et in expected_types:
                     self.assertIn(et, seen, f"Missing {et} for {watch_path} in mode {mode}")
