@@ -576,7 +576,7 @@ class LinuxCollector(Collector):
                         self._handle_file_handle_event(mask, pid, data, offset, length, metadata_len)
                 else:
                     # Basic mode: only FAN_OPEN and FAN_MODIFY with event_fd >= 0
-                    if event_fd >= 0 and (mask & (FAN_OPEN | FAN_MODIFY | FAN_CREATE)):
+                    if event_fd >= 0 and (mask & (FAN_OPEN | FAN_MODIFY)):
                         self._handle_file_event(mask, event_fd, pid)
                     elif event_fd < 0:
                         # Unexpected file-handle event in basic mode; report loss
