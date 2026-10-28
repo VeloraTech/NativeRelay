@@ -85,7 +85,12 @@ class LinuxCollectorIntegrationTests(unittest.TestCase):
                     handle.write("controlled test metadata only\n")
                 # Open the directory itself (triggers OPEN on dir in dir-only mode)
                 if mode == "dir-only":
-                    os.listdir(temp)  # triggers FAN_OPEN on the directory
+                    # Use os.open with O_DIRECTORY to reliably trigger fanotify OPEN
+                    dir_fd = os.open(temp, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.listdir(dir_fd)  # read directory via fd
+                    finally:
+                        os.close(dir_fd)
                 else:
                     # Read file (triggers OPEN on file in other modes)
                     with target.open("r", encoding="utf-8") as handle:
