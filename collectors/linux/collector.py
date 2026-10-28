@@ -547,11 +547,15 @@ class LinuxCollector(Collector):
         return best
 
     def _fanotify_loop(self):
+        self.health["errors"].append(f"fanotify_loop: started, fd={self._fanotify_fd}")
         poller = select.poll()
         poller.register(self._fanotify_fd, select.POLLIN | select.POLLERR | select.POLLHUP)
         while not self._stop.is_set():
             ready = poller.poll(500)
-            if not ready: continue
+            if not ready: 
+                self.health["errors"].append("fanotify_loop: poll timeout")
+                continue
+            self.health["errors"].append(f"fanotify_loop: poll ready={ready}")
             try: data = os.read(self._fanotify_fd, 65536)
             except BlockingIOError: continue
             except OSError:
