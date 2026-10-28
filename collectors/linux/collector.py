@@ -495,10 +495,12 @@ class LinuxCollector(Collector):
             self._failure("filesystem", OSError(ctypes.get_errno(), "fanotify_init failed: all flag combinations failed"))
             return
 
-        mask = FAN_OPEN | FAN_MODIFY | FAN_CREATE
+        # FAN_CLASS_NOTIF does not support FAN_CREATE, FAN_DELETE, FAN_MOVED_FROM, FAN_MOVED_TO
+        # Use only FAN_OPEN and FAN_MODIFY for notification class
+        mask = FAN_OPEN | FAN_MODIFY
         # Mark the specific directory only (not recursive, no mount marking)
         scope_path = os.fsencode(str(self.scope))
-        self.health["errors"].append(f"fanotify_mark {basic_mode_desc} (FAN_MARK_ONLYDIR) trying path: {scope_path!r}")
+        self.health["errors"].append(f"fanotify_mark {basic_mode_desc} (FAN_MARK_ONLYDIR) trying path: {scope_path!r} mask={mask:#x}")
         if mark(basic_fd, FAN_MARK_ADD | FAN_MARK_ONLYDIR, mask, -100, scope_path) < 0:
             errno_val = ctypes.get_errno()
             self.health["errors"].append(f"fanotify_mark {basic_mode_desc} (FAN_MARK_ONLYDIR) failed: {os.strerror(errno_val)} (errno={errno_val})")
@@ -511,15 +513,16 @@ class LinuxCollector(Collector):
         self._fanotify_advanced = False
         self._fanotify_mode = "dir-only"
         self.health["filesystem"] = "available"
+        # FAN_CLASS_NOTIF only supports FAN_OPEN, FAN_MODIFY (not FAN_CREATE)
         self._set_status(
-            (EventType.FILE_OPENED, EventType.FILE_MODIFIED, EventType.FILE_CREATED),
+            (EventType.FILE_OPENED, EventType.FILE_MODIFIED),
             CollectorStatus.AVAILABLE,
-            f"fanotify directory-only notifications for {self.scope} (non-recursive, delete/rename unsupported)"
+            f"fanotify directory-only notifications for {self.scope} (non-recursive, delete/rename/create unsupported)"
         )
         self._set_status(
-            (EventType.FILE_DELETED, EventType.FILE_RENAMED),
+            (EventType.FILE_CREATED, EventType.FILE_DELETED, EventType.FILE_RENAMED),
             CollectorStatus.UNAVAILABLE,
-            "directory-only mode does not support delete/rename events"
+            "directory-only mode (FAN_CLASS_NOTIF) does not support create/delete/rename events"
         )
         thread = threading.Thread(target=self._fanotify_loop, daemon=True, name="nativerelay-fanotify")
         thread.start()

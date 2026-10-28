@@ -71,19 +71,19 @@ class LinuxCollectorIntegrationTests(unittest.TestCase):
                 mode = collector.fanotify_mode
                 target = Path(temp) / "controlled.txt"
                 
-                # In dir-only mode, we monitor the directory itself, not files within
-                # Creating/modifying files in the dir triggers CREATE/MODIFY on the directory
+                # In dir-only mode (FAN_CLASS_NOTIF), only OPEN and MODIFY are supported
+                # Creating/modifying files in the dir triggers OPEN/MODIFY on the directory
                 if mode == "dir-only":
                     watch_path = Path(temp)
-                    expected_types = {EventType.FILE_CREATED, EventType.FILE_MODIFIED}
+                    expected_types = {EventType.FILE_OPENED, EventType.FILE_MODIFIED}
                 else:
                     watch_path = target
                     expected_types = {EventType.FILE_OPENED, EventType.FILE_MODIFIED}
                 
-                # Write file (triggers CREATE on dir in dir-only mode)
+                # Write file (triggers MODIFY on dir in dir-only mode)
                 with target.open("w", encoding="utf-8") as handle:
                     handle.write("controlled test metadata only\n")
-                # Read file (triggers OPEN on dir in dir-only mode, or MODIFY)
+                # Read file (triggers OPEN on dir in dir-only mode)
                 with target.open("r", encoding="utf-8") as handle:
                     handle.read()
                 
