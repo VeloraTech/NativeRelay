@@ -109,6 +109,7 @@ class LinuxCollectorIntegrationTests(unittest.TestCase):
                         seen.add(event.type)
                 if not expected_types.issubset(seen):
                     print(f"DEBUG: All received events: {all_events}", file=sys.stderr)
+                    print(f"DEBUG: collector health after test: {collector.status}", file=sys.stderr)
                 
                 for et in expected_types:
                     self.assertIn(et, seen, f"Missing {et} for {watch_path} in mode {mode}")
