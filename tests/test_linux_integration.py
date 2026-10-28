@@ -71,8 +71,9 @@ class LinuxCollectorIntegrationTests(unittest.TestCase):
                 mode = collector.fanotify_mode
                 target = Path(temp) / "controlled.txt"
                 
-                # In dir-only mode (FAN_CLASS_NOTIF), only OPEN and MODIFY are supported
-                # Creating/modifying files in the dir triggers OPEN/MODIFY on the directory
+                # In dir-only mode, we need operations that actually modify the directory itself
+                # Creating/renaming entries in the dir triggers MODIFY on the directory
+                # Opening the dir triggers OPEN on the directory
                 if mode == "dir-only":
                     watch_path = Path(temp)
                     expected_types = {EventType.FILE_OPENED, EventType.FILE_MODIFIED}
@@ -80,17 +81,14 @@ class LinuxCollectorIntegrationTests(unittest.TestCase):
                     watch_path = target
                     expected_types = {EventType.FILE_OPENED, EventType.FILE_MODIFIED}
                 
-                # Write file (triggers MODIFY on dir in dir-only mode)
-                with target.open("w", encoding="utf-8") as handle:
-                    handle.write("controlled test metadata only\n")
+                # Create a subdirectory (triggers MODIFY on parent dir in dir-only mode)
+                subdir = Path(temp) / "subdir"
+                subdir.mkdir()
                 # Open the directory itself (triggers OPEN on dir in dir-only mode)
                 if mode == "dir-only":
-                    # Use os.open with O_DIRECTORY to reliably trigger fanotify OPEN
+                    # Use os.open on path to trigger OPEN event on directory
                     dir_fd = os.open(temp, os.O_RDONLY | os.O_DIRECTORY)
-                    try:
-                        os.listdir(dir_fd)  # read directory via fd
-                    finally:
-                        os.close(dir_fd)
+                    os.close(dir_fd)
                 else:
                     # Read file (triggers OPEN on file in other modes)
                     with target.open("r", encoding="utf-8") as handle:
