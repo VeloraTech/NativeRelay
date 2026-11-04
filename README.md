@@ -3,16 +3,25 @@
 
 NativeRelay is a local-first, embeddable operating-system observability layer for developer tools. It normalizes the event interface across platforms, while platform-specific collectors expose different capabilities and coverage.
 
-**System telemetry is currently Linux-supported.** macOS and Windows collectors are future work. NativeRelay reports native observations; it does not identify AI agents, infer file contents, or depend on AgentTrace.
+**Linux and Windows 10/11 have collectors with platform-specific coverage.** Windows process start/exit events use WMI trace notifications when permitted, otherwise a degraded Toolhelp snapshot fallback; scoped recursive file create/modify/delete/rename events use `ReadDirectoryChangesW`, which cannot identify the responsible process. File-open events are unsupported on Windows. macOS collector work is future work. NativeRelay reports native observations; it does not identify AI agents, infer file contents, or depend on AgentTrace.
 
 ## Phase 3 status
 
-The Linux collector adds filesystem create, delete, and rename events via fanotify's file-handle reporting (FAN_CREATE, FAN_DELETE, FAN_MOVE). Events are attributed to the responsible process (PID reported via FAN_REPORT_PID) and paths are resolved via file handles (open_by_handle_at). Events are filtered by the selected scope and optional include/exclude patterns. Rename events are emitted as FAN_MOVED_FROM/FAN_MOVED_TO pairs with metadata indicating direction. (`--include-paths`/`--exclude-paths`),
-improved shutdown reliability, and enhanced loss reporting. The process connector
+The Linux collector implements filesystem create, delete, and rename events via fanotify file-handle reporting (FAN_CREATE, FAN_DELETE, FAN_MOVED_FROM/FAN_MOVED_TO), when the kernel and filesystem support the required mode. Events are attributed to the reported process ID and paths are resolved via file handles. Rename notifications are emitted as separate source/destination events with direction metadata; consumers must correlate the pair. File events are filtered by the selected scope and optional include/exclude patterns. The process connector
 (`NETLINK_CONNECTOR/CN_PROC`) reports netlink overrun as loss with unknown count;
 fanotify queue overflow and malformed events are similarly reported. File events
 support fnmatch-style include/exclude patterns. Collector shutdown closes sockets
 before joining threads to prevent hangs.
+
+On Windows 10/11, WMI process trace notifications provide process start and stop
+events when policy permits. If WMI subscription is denied, NativeRelay falls
+back to Toolhelp process snapshots every 200 ms; that best-effort fallback can
+miss short-lived processes. Process start events cover activity after collection
+starts, not processes already running. `ReadDirectoryChangesW` reports recursive create,
+modify, delete, and rename notifications within the selected directory. Those
+file events have an unknown actor (`process.pid` is `0`); Windows file-open
+events are unsupported. Notification-buffer overflows are reported as loss
+with an unknown count.
 
 | Event | Linux status | Notes |
 |---|---|---|
@@ -27,20 +36,20 @@ Capabilities distinguish supported (implemented but not started), available (act
 
 ## Run locally
 
-Python 3.11 or newer, Linux, and no third-party runtime dependencies are required. From a checkout:
+Python 3.11 or newer is required. Linux and Windows 10/11 use only standard-library Python modules and native OS facilities. From a Linux checkout:
 
 ```sh
 python -m nativerelay.cli capabilities --scope /path/to/workspace
 python -m nativerelay.cli observe --scope /path/to/workspace
 python -m nativerelay.cli observe --scope /path/to/workspace --json
 nativerelay run --format json --scope /path/to/workspace
-# Path filtering (Phase 2):
+# Path filtering:
 nativerelay run --format json --scope /path/to/workspace --include-paths "*.py" --exclude-paths "test_*"
 ```
 
 `nativerelay run --format json` is the installed console command for machine consumers. It writes compact JSON Lines to stdout: normalized event objects retain the event schema, while control records use `record_type` values `nativerelay.status` and `nativerelay.loss` (both schema version 1). Status records report startup, capability/health changes, and shutdown; loss records include the loss generation and cumulative loss ledger. Human diagnostics go to stderr. The command uses the current directory as its default scope and exits cleanly on Ctrl-C or SIGTERM. Exit codes are 0 for clean shutdown, 2 for invalid arguments, 3 when collection cannot start or no source is available, and 4 for runtime failure. Loss is reported, never recovered.
 
-The process connector may be unavailable depending on kernel configuration and privilege; subscribing to its netlink multicast group generally requires root or `CAP_NET_ADMIN`. `fanotify` mount monitoring requires `CAP_SYS_ADMIN`; the CLI reports each degraded state. Use least privilege that satisfies the kernel on the target system. `--include-command` opts into process argument collection and should be used with care. Path filtering uses fnmatch patterns matched against the full path and basename.
+The process connector may be unavailable depending on kernel configuration and privilege; subscribing to its netlink multicast group generally requires root or `CAP_NET_ADMIN`. `fanotify` mount monitoring requires `CAP_SYS_ADMIN`; the CLI reports each degraded state. Use least privilege that satisfies the kernel on the target system. `--include-command` opts into process argument collection and should be used with care. On Windows, WMI policy can prevent process trace subscriptions, in which case the collector falls back to 200 ms process snapshots and reports degraded coverage. Windows command-line collection is also opt-in. Path filtering uses fnmatch patterns matched against the full path and basename.
 
 ## Embed
 
@@ -60,14 +69,15 @@ try:
         except TimeoutError:
             # Consult collector.capabilities and collector.status before treating silence as meaningful.
             continue
-        print(event.type.value, event.process.pid, event.resource)
+        actor = "unknown" if event.process.pid == 0 else str(event.process.pid)
+        print(event.type.value, actor, event.resource)
 except StreamClosed:
     pass
 finally:
     collector.stop()
 ```
 
-The event contract does not require consumers to import `collectors.linux`; future macOS and Windows collectors can implement the common `Collector` interface while reporting their own capabilities.
+The event contract does not require consumers to import a platform collector at the core boundary. Linux and Windows collectors report their own capabilities; macOS remains future work.
 
 ## Documentation
 
@@ -82,6 +92,6 @@ The event contract does not require consumers to import `collectors.linux`; futu
 
 ## Project status
 
-Phase 2 is complete for the documented event set and remains pre-release. Path filtering for file events (`--include-paths`/`--exclude-paths`), improved shutdown reliability (socket closure before thread join), and enhanced loss reporting (CN_PROC netlink overrun, fanotify overflow, malformed events, path resolution failures) are implemented. Controlled CN_PROC process-lifecycle and fanotify file-event integration tests passed in the privileged GitHub Actions Linux workflow; the workflow targets Ubuntu 22.04 and 24.04. The fanotify smoke test also passed under root in WSL2 on Linux 6.6.87. WSL could not validate CN_PROC because the distro uses a non-initial PID namespace. Precise CN_PROC loss accounting remains best-effort (netlink overrun is detected but kernel-internal queue loss cannot be precisely quantified). NativeRelay does not provide complete audit coverage. See the capability and limitations documentation before use.
+NativeRelay remains pre-release. Linux Phases 1–3 in the roadmap are marked complete. The privileged GitHub Actions workflow on Ubuntu 22.04 and 24.04 validates CN_PROC process lifecycle and fanotify open/modify attribution. Create/delete/rename handling is implemented for compatible fanotify modes, but the live Linux integration workflow does not validate those event types. Windows 10 live integration tests cover WMI process lifecycle and recursive file create/modify/delete/rename; Windows CI exercises compatible Windows Server runners, and Windows 11 should also be validated on a client installation. Windows file events have no process attribution, and file-open events are unsupported. Capabilities and coverage depend on OS facilities and permissions; use the runtime capability report and read the [platform support matrix](docs/platform-support.md). NativeRelay is best-effort observability, not complete audit coverage.
 
 MIT licensed. No cloud service, account, network connection, or remote telemetry is required.

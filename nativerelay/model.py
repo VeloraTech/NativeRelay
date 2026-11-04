@@ -31,13 +31,14 @@ class CollectorStatus(str, Enum):
 
 @dataclass(frozen=True)
 class Process:
+    """Process identity; PID 0 means the native source did not identify an actor."""
     pid: int
     parent_pid: int | None = None
     executable: str | None = None
     command: tuple[str, ...] | None = None
     def __post_init__(self):
-        if not isinstance(self.pid, int) or self.pid <= 0 or (self.parent_pid is not None and (not isinstance(self.parent_pid, int) or self.parent_pid < 0)):
-            raise ValueError("process IDs must be positive (parent may be zero)")
+        if not isinstance(self.pid, int) or self.pid < 0 or (self.parent_pid is not None and (not isinstance(self.parent_pid, int) or self.parent_pid < 0)):
+            raise ValueError("process IDs must be non-negative (zero means unknown)")
         if self.executable is not None and not isinstance(self.executable, str): raise ValueError("executable must be a string")
         if self.command is not None and not all(isinstance(x, str) for x in self.command):
             raise ValueError("command must contain strings")

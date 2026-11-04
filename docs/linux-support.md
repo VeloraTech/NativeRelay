@@ -1,48 +1,46 @@
 # Linux collector: support, capabilities, and limits
 
-The Phase 1 collector is implemented in `collectors/linux`. It has two independent kernel sources and filters file events to one configured directory.
+The Linux reference collector implements the Linux event set in roadmap Phases 1–3. Process and filesystem collection use independent kernel sources; file events are filtered to the caller-selected directory and optional path patterns. All observations are best effort, not a complete audit log.
 
-## Mechanisms
+## Process lifecycle: `NETLINK_CONNECTOR/CN_PROC`
 
-### Process lifecycle: `NETLINK_CONNECTOR/CN_PROC`
+The process connector delivers fork and exit notifications through netlink. Fork notifications include parent and child PIDs, so a short-lived child does not need to survive a process-table scan. Thread clones are ignored. Exit events describe the thread-group leader; `leaderThreadExit: true` does not mean every thread in the group has stopped.
 
-The process connector delivers kernel fork and exit notifications through netlink. Fork notifications supply parent and child PIDs directly, so short-lived children do not need to survive a process-table scan. The collector ignores thread clones and reports the thread-group leader's exit with `leaderThreadExit: true`; a multithreaded process may still have other threads running when that leader exits. This is therefore a kernel task lifecycle signal, not a guarantee that the thread group has fully disappeared. The collector reads `/proc/<pid>/stat` and `/proc/<pid>/exe` opportunistically for parent/executable metadata; these may already be unavailable by the time userspace handles an event. Arguments are omitted by default and read from `/proc/<pid>/cmdline` only with `--include-command`; command-line values can contain secrets. Event timestamps are userspace receipt/normalization times, not the connector's kernel monotonic timestamps.
+The collector opportunistically reads `/proc/<pid>/stat` and `/proc/<pid>/exe` for metadata; those values may no longer be available when userspace handles the event. Arguments are omitted by default and read from `/proc/<pid>/cmdline` only with `--include-command`; command-line values can contain secrets. Timestamps are userspace receipt/normalization times.
 
-Connector availability depends on the kernel build (`CONFIG_CONNECTOR` and process events), namespaces, security policy, and privileges. Netlink multicast subscription generally requires root or `CAP_NET_ADMIN`. Subscription failures are reported as `permission_denied` or `unavailable`. Events can be lost if the kernel or netlink receive queue overflows; this initial implementation does not yet decode connector loss diagnostics, so it must not be treated as a complete audit log.
+Availability depends on kernel configuration, namespace, security policy, and privileges. Netlink multicast subscription generally requires root or `CAP_NET_ADMIN`. The collector waits for the connector acknowledgement before reporting the source as available. A surfaced `NLMSG_OVERRUN` is reported as loss with an unknown count, but kernel-internal or otherwise unreported loss cannot be quantified. Process events remain best effort even when the capability is `available`.
 
-### File activity: `fanotify`
+## File activity: `fanotify`
 
-The collector requests notification-class fanotify and marks the filesystem mount containing the requested scope for `FAN_OPEN` and `FAN_MODIFY`. Mount-wide notifications are filtered in userspace to the resolved scope directory. Events include the kernel-supplied PID and an event file descriptor, whose path is resolved through `/proc/self/fd`.
+The collector tries fanotify modes in order, preferring file-handle reporting for create, delete, and rename events, then falling back to modes with more limited coverage. Depending on the mode, monitoring may be filesystem-wide and filtered in userspace, mount-scoped, or limited to the exact directory and non-recursive. Mount/filesystem notification generally requires `CAP_SYS_ADMIN`. Namespace boundaries and alternate bind mounts can affect visibility.
 
-This is process-attributed kernel file notification, not a generic directory watcher. The mount mark may observe many unrelated operations inside that mount before filtering. Mount marking requires `CAP_SYS_ADMIN`; the full mount may span far more than the selected directory. A file reached through a different bind mount may not match the mark and can be missed. Container, PID, and mount namespace boundaries affect what is visible.
+| Event type | Support and meaning |
+|---|---|
+| `file.opened` | Best effort. An open notification does not prove that file contents were read. |
+| `file.modified` | Best effort. Does not identify changed bytes or guarantee durable storage. |
+| `file.created` | Implemented in file-handle reporting mode; availability depends on kernel/filesystem support and selected mode. |
+| `file.deleted` | Implemented in file-handle reporting mode; availability depends on kernel/filesystem support and selected mode. |
+| `file.renamed` | Implemented in file-handle reporting mode. `FAN_MOVED_FROM` and `FAN_MOVED_TO` are emitted as separate events with direction metadata; consumers must correlate them. |
 
-| Event type | Status | Meaning |
-|---|---|---|
-| `file.opened` | Best effort | Kernel reported open; does not establish a successful read or content access. |
-| `file.modified` | Best effort | Kernel reported a modification; does not identify changed bytes or guarantee durable storage. |
-| `file.created` | Unsupported | Not generated. |
-| `file.deleted` | Unsupported | Not generated. |
-| `file.renamed` | Unsupported | Not generated. |
+The capability report describes the event types available after collector startup. In fallback modes, some event types may be unavailable. The live integration workflow currently exercises open/modify attribution, not create/delete/rename delivery. Do not treat implementation or an `available` state as proof of complete coverage.
 
-Creation, deletion, and rename require reliable name/event correlation beyond this initial descriptor-based implementation. They are not inferred from close or open events.
+File-handle paths are resolved with `open_by_handle_at`; ordinary event-descriptor paths are resolved through `/proc/self/fd`. Path filters use fnmatch-style patterns against the absolute path and basename, and the configured scope boundary is always enforced.
 
-`FAN_Q_OVERFLOW` is reported in the loss snapshot with an unknown lost-event count and a collector sequence marker. Malformed/truncated records are reported as unknown-count loss; path resolution failures report the number of masked operations lost. Bounded stream drops have an exact count and rejected-event sequence. These losses are detected and reported, never recovered. `status["dropped"]` counts stream-full rejections only; `status["losses"]` is the unified source/reason ledger. The implementation does not read file contents, hash files, read environment variables, or send telemetry remotely.
+## Loss, privacy, and shutdown
 
-## Capability and permission behavior
+The collector reports fanotify queue overflow, malformed/truncated records, and path-resolution failures to the stream loss ledger. Stream-full rejections have exact counts; native queue overflow has an unknown count. Loss is reported, not recovered. `status["dropped"]` counts stream-full rejections; inspect `status["losses"]` and `loss_generation` for the unified ledger.
 
-Process and file collectors start independently. One may work when the other fails. The `capabilities --scope` command briefly initializes both sources and reports their observed startup states, then shuts them down. Consumers can inspect the collector capability property and status after startup. `available` indicates a source initialized, not complete system coverage. `unsupported` means this implementation intentionally does not produce that event. Elevated privileges are not requested automatically.
+The collector does not read file contents, hash files, read environment-variable values, or send telemetry remotely. Command-line collection is opt-in. Elevated privileges are not requested automatically. Shutdown closes native sources before joining their reader threads.
+
+## Validation status
+
+Unit tests cover the event model and stream, connector parsing and acknowledgement, surfaced overrun handling, fanotify loss parsing, and path filtering. The opt-in integration tests use a temporary child process and filesystem objects.
+
+The privileged [Linux collector workflow](../.github/workflows/linux-collector.yml) runs on Ubuntu 22.04 and 24.04 and requires live CN_PROC process lifecycle/parent-PID and fanotify open/modify attribution checks to pass. It does not currently validate live create/delete/rename delivery. On the documented WSL2 development environment, root fanotify open/modify testing passed, while CN_PROC did not acknowledge subscription from the distro's non-initial PID namespace.
+
+Use the runtime `capabilities` command and inspect collector status; a quiet event stream is not evidence that no activity occurred:
 
 ```sh
 python -m nativerelay.cli capabilities --scope /workspace
 python -m nativerelay.cli observe --scope /workspace --json
 ```
-
-## Validation status
-
-Deterministic tests exercise normalized models, stream limits, connector packet parsing, acknowledgement handling, and permission/unsupported capability states. The opt-in integration tests use a temporary child process and temporary file.
-
-The controlled CN_PROC process lifecycle and parent PID test and the fanotify open/modify attribution test passed in the privileged GitHub Actions Linux integration workflow targeting Ubuntu 22.04 and 24.04. The current development host's WSL2 kernel (`6.6.87.2-microsoft-standard-WSL2`) also passed the root fanotify test; the unprivileged fanotify test correctly reported `EPERM`. CN_PROC did not acknowledge a subscription in WSL because the distro uses a non-initial PID namespace. The kernel's CN_PROC handler returns without acknowledging requests outside the initial PID/user namespaces ([kernel handler](https://github.com/torvalds/linux/blob/master/drivers/connector/cn_proc.c#L1815-L1829)).
-
-A surfaced netlink `NLMSG_OVERRUN` is reported with an unknown loss count and sequence marker. CN_PROC/kernel loss may occur without a surfaced overrun, and the implementation cannot provide precise process-loss accounting. A consumer must treat process coverage as best effort even when the capability status is `available`; do not infer that a quiet stream means no process activity occurred.
-
-The repository's [Linux collector workflow](../.github/workflows/linux-collector.yml) runs the required live checks as root on Ubuntu 22.04 and 24.04. A collector unavailable in that environment fails CI rather than silently skipping validation.

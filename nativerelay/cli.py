@@ -4,22 +4,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import signal
 import sys
 import threading
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from collectors.linux import LinuxCollector
-from .model import EventType
 from .stream import EventStream, StreamClosed
 
-RUN_EVENT_TYPES = {
-    EventType.PROCESS_STARTED,
-    EventType.PROCESS_EXITED,
-    EventType.FILE_OPENED,
-    EventType.FILE_MODIFIED,
-}
+LinuxCollector = None
+
 EXIT_OK = 0
 EXIT_ARGUMENT_ERROR = 2
 EXIT_COLLECTOR_UNAVAILABLE = 3
@@ -27,10 +22,10 @@ EXIT_RUNTIME_FAILURE = 4
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="nativerelay", description="Observe local Linux kernel events")
+    parser = argparse.ArgumentParser(prog="nativerelay", description="Observe local operating-system events")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    observe = commands.add_parser("observe", help="stream process events and scoped file open/write events")
+    observe = commands.add_parser("observe", help="stream process and scoped file events")
     observe.add_argument("--scope", required=True, help="existing directory to include in file events")
     observe.add_argument("--include-paths", action="append", default=[], metavar="PATTERN",
                          help="fnmatch pattern for paths to include (can be repeated)")
@@ -63,7 +58,8 @@ def main(argv=None):
                          exclude_paths=args.exclude_paths or None)
 
     try:
-        collector = LinuxCollector(
+        factory = _platform_collector()
+        collector = factory(
             args.scope,
             include_command=getattr(args, "include_command", False),
             include_paths=getattr(args, "include_paths", None) or None,
@@ -77,7 +73,8 @@ def main(argv=None):
         stream = EventStream(1)
         try:
             collector.start(stream)
-            print(json.dumps({"platform": "linux", "collector": collector.name,
+            print(json.dumps({"platform": getattr(collector, "platform", _platform_id()),
+                              "collector": collector.name,
                               "scope": str(collector.scope), "health": collector.status,
                               "capabilities": [_capability_record(c) for c in collector.capabilities]}, indent=2))
         finally:
@@ -87,7 +84,8 @@ def main(argv=None):
     stream = EventStream()
     try:
         collector.start(stream)
-        print("NativeRelay Linux observe (Ctrl-C to stop)", file=sys.stderr)
+        print(f"NativeRelay {getattr(collector, 'platform', platform.system().lower())} observe (Ctrl-C to stop)",
+              file=sys.stderr)
         last_dropped = -1
         last_loss_generation = -1
         while True:
@@ -137,32 +135,35 @@ def _run_json(scope, *, include_command=False, include_paths=None, exclude_paths
             previous_handlers.pop(signum, None)
 
     try:
-        factory = collector_factory or LinuxCollector
+        platform_name = _platform_id()
+        factory = collector_factory or _platform_collector()
         try:
             collector = factory(scope, include_command=include_command,
                                include_paths=include_paths, exclude_paths=exclude_paths)
         except Exception as exc:
             _diagnostic(diagnostics, f"collector initialization failed: {exc}")
-            writer.control("nativerelay.status", state="failed", platform="linux",
-                           collector="linux-kernel", scope=scope, error=str(exc), exit_code=EXIT_COLLECTOR_UNAVAILABLE)
+            writer.control("nativerelay.status", state="failed", platform=platform_name,
+                           collector="native", scope=scope, error=str(exc), exit_code=EXIT_COLLECTOR_UNAVAILABLE)
             exit_code = EXIT_COLLECTOR_UNAVAILABLE
 
         if collector is not None:
+            platform_name = getattr(collector, "platform", platform_name)
+            collector_name = getattr(collector, "name", "native")
             try:
                 collector.start(stream)
                 started = True
             except Exception as exc:
                 _diagnostic(diagnostics, f"collector start failed: {exc}")
-                writer.control("nativerelay.status", state="failed", platform="linux",
-                               collector=getattr(collector, "name", "unknown"), scope=scope,
+                writer.control("nativerelay.status", state="failed", platform=platform_name,
+                               collector=collector_name, scope=scope,
                                error=str(exc), exit_code=EXIT_COLLECTOR_UNAVAILABLE)
                 exit_code = EXIT_COLLECTOR_UNAVAILABLE
 
         if started:
             status = _collector_status(collector)
             state = _collection_state(collector)
-            writer.control("nativerelay.status", state=state, platform="linux",
-                           collector=getattr(collector, "name", "linux-kernel"), scope=scope,
+            writer.control("nativerelay.status", state=state, platform=platform_name,
+                           collector=collector_name, scope=scope,
                            capabilities=_capabilities(collector), health=status)
             _report_diagnostics(diagnostics, state, status)
             last_status_signature = _status_signature(collector)
@@ -180,8 +181,8 @@ def _run_json(scope, *, include_command=False, include_paths=None, exclude_paths
                     except StreamClosed:
                         if stream.error is not None:
                             _diagnostic(diagnostics, f"event stream failed: {stream.error}")
-                            writer.control("nativerelay.status", state="failed", platform="linux",
-                                           collector=getattr(collector, "name", "linux-kernel"),
+                            writer.control("nativerelay.status", state="failed", platform=platform_name,
+                                           collector=collector_name,
                                            scope=scope, error=str(stream.error), exit_code=EXIT_RUNTIME_FAILURE)
                             exit_code = EXIT_RUNTIME_FAILURE
                         break
@@ -195,8 +196,8 @@ def _run_json(scope, *, include_command=False, include_paths=None, exclude_paths
                     if current_signature != last_status_signature:
                         current_state = _collection_state(collector)
                         current_status = _collector_status(collector)
-                        writer.control("nativerelay.status", state=current_state, platform="linux",
-                                       collector=getattr(collector, "name", "linux-kernel"), scope=scope,
+                        writer.control("nativerelay.status", state=current_state, platform=platform_name,
+                                       collector=collector_name, scope=scope,
                                        capabilities=_capabilities(collector), health=current_status)
                         _report_diagnostics(diagnostics, current_state, current_status)
                         last_status_signature = current_signature
@@ -211,8 +212,8 @@ def _run_json(scope, *, include_command=False, include_paths=None, exclude_paths
     except Exception as exc:
         _diagnostic(diagnostics, f"runtime failure: {exc}")
         try:
-            writer.control("nativerelay.status", state="failed", platform="linux",
-                           collector=getattr(collector, "name", "linux-kernel"), scope=scope,
+            writer.control("nativerelay.status", state="failed", platform=platform_name,
+                           collector=getattr(collector, "name", "native"), scope=scope,
                            error=str(exc), exit_code=EXIT_RUNTIME_FAILURE)
         except BrokenPipeError:
             pass
@@ -241,8 +242,8 @@ def _run_json(scope, *, include_command=False, include_paths=None, exclude_paths
             try:
                 _emit_loss_if_changed(writer, collector, stream, last_loss_generation)
                 final_state = "stopped" if exit_code == EXIT_OK else "failed"
-                writer.control("nativerelay.status", state=final_state, platform="linux",
-                               collector=getattr(collector, "name", "linux-kernel"), scope=scope,
+                writer.control("nativerelay.status", state=final_state, platform=platform_name,
+                               collector=getattr(collector, "name", "native"), scope=scope,
                                capabilities=_capabilities(collector), health=_collector_status(collector),
                                clean_shutdown=exit_code == EXIT_OK,
                                shutdown_signal=shutdown_signal[0], exit_code=exit_code)
@@ -302,12 +303,13 @@ def _collector_status(collector):
 
 
 def _collection_state(collector):
-    supported = [cap for cap in collector.capabilities
-                 if cap.event_type in RUN_EVENT_TYPES]
-    active = [cap for cap in supported if cap.status.value == "available"]
+    supported = [cap for cap in collector.capabilities if cap.status.value != "unsupported"]
+    active = [cap for cap in supported if cap.status.value in ("available", "degraded")]
     if not active:
         return "unavailable"
-    if len(active) != len(RUN_EVENT_TYPES):
+    if len(active) != len(supported) or any(
+        cap.status.value == "degraded" for cap in active
+    ):
         return "degraded"
     return "running"
 
@@ -326,7 +328,7 @@ def _emit_loss_if_changed(writer, collector, stream, previous_generation):
     if generation > previous_generation:
         writer.control("nativerelay.loss", loss_generation=generation,
                        losses=status.get("losses", stream.losses),
-                       collector=getattr(collector, "name", "linux-kernel"))
+                       collector=getattr(collector, "name", "native"))
     return generation
 
 
@@ -342,12 +344,32 @@ def _diagnostic(stderr, message):
 
 
 def _human(event):
-    proc = f"pid={event.process.pid}"
+    proc = "pid=unknown" if event.process.pid == 0 else f"pid={event.process.pid}"
     if event.process.parent_pid is not None: proc += f" ppid={event.process.parent_pid}"
     if event.process.executable: proc += f" exe={event.process.executable}"
     resource = f" {event.resource.path}" if event.resource else ""
     metadata = " " + json.dumps(event.metadata) if event.metadata else ""
     return f"{event.timestamp} {event.type.value} {proc}{resource}{metadata}"
+
+
+def _platform_id():
+    if sys.platform == "win32":
+        return "windows"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    return platform.system().lower() or "unknown"
+
+
+def _platform_collector():
+    if LinuxCollector is not None:
+        return LinuxCollector
+    if sys.platform == "win32":
+        from collectors.windows import WindowsCollector
+        return WindowsCollector
+    if sys.platform.startswith("linux"):
+        from collectors.linux import LinuxCollector as linux_collector
+        return linux_collector
+    raise OSError(f"NativeRelay has no collector for {_platform_id()}")
 
 
 if __name__ == "__main__":

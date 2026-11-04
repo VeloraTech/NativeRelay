@@ -19,7 +19,8 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(Event.stable_id("c", "b", 2), Event.stable_id("c", "b", 2))
         self.assertNotEqual(Event.stable_id("c", "b", 2), Event.stable_id("c", "b", 3))
     def test_validation_and_malformed_input(self):
-        with self.assertRaises(ValueError): Process(0)
+        self.assertEqual(Process(0).pid, 0)
+        with self.assertRaises(ValueError): Process(-1)
         with self.assertRaises(ValueError): Event(EventType.PROCESS_STARTED, "linux", "test", Process(1), timestamp="2026-01-01T00:00:00")
         with self.assertRaises(ValueError): Event(EventType.PROCESS_STARTED, "linux", "test", "not-a-process")
         with self.assertRaises(ValueError): Event(EventType.PROCESS_STARTED, "linux", "test", Process(1), metadata={"bad": object()})

@@ -38,9 +38,15 @@ Project scope, design principles, initial event model, and platform research wer
 - [x] Capability reporting for new event types
 - [x] Documentation updates
 
-## Phase 4 — Windows research and collector
+## Phase 4 — Windows collector
 
-Evaluate ETW providers, file/process attribution, privileges, supported Windows versions, event loss, and equivalent semantics before implementation.
+- [x] WMI process start/stop notifications
+- [x] Toolhelp process snapshot fallback when WMI trace access is denied
+- [x] Recursive scoped file create/modify/delete/rename notifications with `ReadDirectoryChangesW`
+- [x] Explicit unknown-actor representation for file events and unsupported open capability
+- [x] Windows CLI collector selection, path filtering, loss reporting, and shutdown handling
+- [x] Windows unit and live integration test harness
+- [ ] Confirm live integration on Windows 11 client; Windows 10 is the current local live-validation target and hosted Windows Server CI remains API validation
 
 ## Phase 5 — macOS research and collector
 
