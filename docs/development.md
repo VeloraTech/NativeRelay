@@ -30,12 +30,12 @@ Set `NATIVERELAY_LINUX_INTEGRATION_REQUIRED=1` in privileged CI to fail instead 
 
 The controlled CN_PROC and fanotify integration tests passed in the privileged GitHub Actions Linux workflow targeting Ubuntu 22.04 and 24.04. On the current WSL2 Linux 6.6.87 kernel, fanotify passed as root and correctly failed without privilege. CN_PROC subscription timed out for both the normal distro user and root because the distro uses a non-initial PID namespace; the hosted Linux CI run provides the live CN_PROC validation.
 
-Windows unit and live integration checks are in `tests/test_windows.py`. The live test uses WMI process start/stop notifications (or the explicitly degraded Toolhelp snapshot fallback when WMI access is denied) and a temporary directory to verify recursive create/modify/delete/rename events. Run it on Windows 10/11 with:
+Windows unit and live integration checks are in `tests/test_windows.py`. The live test uses WMI process start/stop notifications when available, otherwise the explicitly degraded Toolhelp snapshot fallback, and a temporary directory to verify recursive create/modify/delete/rename events. It requires a working process source and filesystem notifications. Run it on Windows 10/11 with:
 
 ```powershell
 python -m unittest discover -s tests -p test_windows.py -v
 ```
 
-Windows CI uses hosted Windows Server runners to exercise these APIs; that is not a substitute for validating on Windows 11 client systems. File notifications do not include process identity, and Windows file-open events are unsupported.
+The live integration test passed on Windows 10 and hosted Windows Server 2022/2025 runners. The local Windows 10 run used Toolhelp polling because WMI tracing was unavailable. No Windows 11 client was available, and WMI-backed process delivery has not yet been verified on a host that permits the subscription. Windows Server CI is useful regression coverage, but is not a substitute for Windows 11 client validation. File notifications do not include process identity, and Windows file-open events are unsupported.
 
 The legacy `observe --json` command emits one compact JSON event per line. The installed `nativerelay run --format json` command is intended for machine consumers: event lines use the canonical event schema, and `nativerelay.status` / `nativerelay.loss` control records make startup, health changes, known loss, and shutdown explicit. All human diagnostics go to stderr. Ctrl-C and SIGTERM stop the collector and drain already-buffered events before the final status record. Exit codes are 0 for clean shutdown, 2 for argument errors, 3 when collection cannot start or has no available source, and 4 for runtime failure. Stream overflow rejects new events; neither stream drops nor native-source loss can be recovered.

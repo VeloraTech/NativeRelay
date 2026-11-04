@@ -105,12 +105,8 @@ class WindowsCollectorIntegrationTests(unittest.TestCase):
                 status = collector.status
                 self.assertEqual(status["filesystem"], "available", status)
                 self.assertIn(status["process"], {
-                    "available", CollectorStatus.PERMISSION_DENIED.value,
-                    CollectorStatus.UNAVAILABLE.value, CollectorStatus.DEGRADED.value,
-                }, status)
-                process_available = status["process"] in {
                     CollectorStatus.AVAILABLE.value, CollectorStatus.DEGRADED.value,
-                }
+                }, status)
 
                 nested = scope / "nested"
                 nested.mkdir()
@@ -129,9 +125,9 @@ class WindowsCollectorIntegrationTests(unittest.TestCase):
                         event = stream.receive(timeout=min(0.5, max(0, deadline - time.monotonic())))
                     except TimeoutError:
                         continue
-                    if process_available and event.type == EventType.PROCESS_STARTED and event.process.pid == child.pid:
+                    if event.type == EventType.PROCESS_STARTED and event.process.pid == child.pid:
                         observed.add(EventType.PROCESS_STARTED)
-                    if process_available and event.type == EventType.PROCESS_EXITED and event.process.pid == child.pid:
+                    if event.type == EventType.PROCESS_EXITED and event.process.pid == child.pid:
                         observed.add(EventType.PROCESS_EXITED)
                     if event.type == EventType.FILE_CREATED and event.resource.path.endswith("created.txt"):
                         observed.add(EventType.FILE_CREATED)
@@ -145,19 +141,17 @@ class WindowsCollectorIntegrationTests(unittest.TestCase):
                         EventType.FILE_CREATED, EventType.FILE_MODIFIED,
                         EventType.FILE_RENAMED, EventType.FILE_DELETED,
                     }
-                    expected = file_events | (
-                        {EventType.PROCESS_STARTED, EventType.PROCESS_EXITED}
-                        if process_available else set()
-                    )
+                    expected = file_events | {
+                        EventType.PROCESS_STARTED, EventType.PROCESS_EXITED,
+                    }
                     if expected.issubset(observed):
                         break
                 child.wait(timeout=3)
                 expected = {
                     EventType.FILE_CREATED, EventType.FILE_MODIFIED,
                     EventType.FILE_RENAMED, EventType.FILE_DELETED,
+                    EventType.PROCESS_STARTED, EventType.PROCESS_EXITED,
                 }
-                if process_available:
-                    expected.update({EventType.PROCESS_STARTED, EventType.PROCESS_EXITED})
                 self.assertTrue(
                     expected.issubset(observed),
                     f"missing {expected - observed}; collector status: {collector.status}",

@@ -12,6 +12,8 @@ jobs:
   build:
     name: Build and verify wheel
     runs-on: ubuntu-latest
+    outputs:
+      stable_release: ${{ steps.version.outputs.stable_release }}
     steps:
       - name: Check out tagged source
         uses: actions/checkout@v7
@@ -22,6 +24,7 @@ jobs:
           python-version: "3.12"
 
       - name: Verify tag matches package version
+        id: version
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
@@ -45,7 +48,11 @@ jobs:
                   f"Release tag {tag_version} must match pyproject.toml ({project_version}) "
                   f"and nativerelay/build.py ({match.group(1)})"
               )
+          stable_release = re.fullmatch(r"\d+\.\d+\.\d+", tag_version) is not None
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"stable_release={str(stable_release).lower()}\n")
           print(f"Release version verified: {tag_version}")
+          print(f"Stable PyPI release: {stable_release}")
           PY
 
       - name: Run unit and parser tests
@@ -71,6 +78,7 @@ jobs:
   publish:
     name: Publish wheel to PyPI
     needs: build
+    if: needs.build.outputs.stable_release == 'true'
     runs-on: ubuntu-latest
     environment:
       name: pypi

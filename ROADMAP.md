@@ -38,7 +38,7 @@ Project scope, design principles, initial event model, and platform research wer
 - [x] Capability reporting for new event types
 - [x] Documentation updates
 
-## Phase 4 — Windows collector
+## Phase 4 — Windows collector (good-faith, best-effort implementation)
 
 - [x] WMI process start/stop notifications
 - [x] Toolhelp process snapshot fallback when WMI trace access is denied
@@ -46,7 +46,9 @@ Project scope, design principles, initial event model, and platform research wer
 - [x] Explicit unknown-actor representation for file events and unsupported open capability
 - [x] Windows CLI collector selection, path filtering, loss reporting, and shutdown handling
 - [x] Windows unit and live integration test harness
-- [ ] Confirm live integration on Windows 11 client; Windows 10 is the current local live-validation target and hosted Windows Server CI remains API validation
+- [x] Windows 10 live integration and Windows Server 2022/2025 CI validation
+- [ ] Confirm live integration on a Windows 11 client; no Windows 11 client was available for validation
+- [ ] Verify WMI process-trace delivery on a host where the subscription is permitted; local Windows 10 validation used the Toolhelp polling fallback
 
 ## Phase 5 — macOS research and collector
 

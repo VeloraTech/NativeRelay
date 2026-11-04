@@ -7,7 +7,7 @@ import io
 from zipfile import ZIP_DEFLATED, ZipFile
 
 NAME = "nativerelay"
-VERSION = "0.3.2"
+VERSION = "0.4.0b1"
 
 def get_requires_for_build_wheel(config_settings=None):
     return []

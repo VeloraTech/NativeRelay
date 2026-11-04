@@ -5,11 +5,10 @@ backend-path = ["."]
 
 [project]
 name = "nativerelay"
-version = "0.3.2"
+version = "0.4.0b1"
 description = "Local-first normalized native OS telemetry"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
 nativerelay = "nativerelay.cli:main"
-
