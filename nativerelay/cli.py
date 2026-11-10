@@ -125,7 +125,8 @@ def _run_json(scope, *, include_command=False, include_paths=None, exclude_paths
         shutdown_signal[0] = signal.Signals(signum).name
         shutdown.set()
 
-    for signum in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
+    for signum in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None),
+                   getattr(signal, "SIGBREAK", None)):
         if signum is None:
             continue
         try:
