@@ -46,7 +46,7 @@ The CLI selects `WindowsCollector` on Windows. This is a good-faith, best-effort
 | Loss detection | - | Implemented (Best Effort) | Directory notification overflow / zero-byte completion and bounded event stream | Same as directory notifications | Native overflow count is unknown; no recovery/replay | Unit and live integration tests |
 | Path filtering | - | Implemented | Userspace fnmatch against absolute path or basename | None beyond directory access | Scope boundary always enforced | Unit tests |
 | Process command line | - | Implemented (Opt-in) | WMI `Win32_Process` query at process-start notification | WMI process-query access | May race with short-lived processes and can contain secrets; excluded by default | Unit coverage / opt-in |
-| Shutdown | - | Implemented | Stop WMI subscription process and cancel overlapped directory I/O | None | Native cancellation behavior is OS-dependent | Live integration test |
+| Shutdown | - | Implemented | Stop WMI subscription process and cancel overlapped directory I/O; JSONL CLI handles SIGINT, SIGTERM, and Windows SIGBREAK | None | Native cancellation behavior is OS-dependent | Unit and live integration tests |
 
 File activity is not attributed to the process that caused it: PID 0 is the explicit unknown-actor sentinel. File-open telemetry and a complete audit guarantee are not provided.
 
