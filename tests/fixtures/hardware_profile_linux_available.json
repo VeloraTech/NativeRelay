@@ -1,0 +1,83 @@
+{
+  "metadata": {
+    "contract_id": "glb-viewer.hardware-profile",
+    "contract_version": "1.0.0",
+    "provider": "NativeRelay",
+    "collected_at": "2026-01-15T12:00:00+00:00",
+    "collector": "native",
+    "platform": "linux",
+    "schema_version": 1
+  },
+  "os": {
+    "name": "Ubuntu 22.04.3 LTS",
+    "version": "6.5.0-100-generic",
+    "architecture": "x86_64",
+    "availability": "available"
+  },
+  "cpu": {
+    "vendor": "amd",
+    "brand": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "logical_count": 16,
+    "physical_count": 8,
+    "max_frequency_mhz": 3200.0,
+    "availability": "available"
+  },
+  "memory": {
+    "total_bytes": 17179869184,
+    "available_bytes": 10737418240,
+    "usage_percent": 37.5,
+    "availability": "available"
+  },
+  "gpus": [
+    {
+      "vendor": "amd",
+      "model": "AMD Radeon Graphics",
+      "vram_bytes": null,
+      "driver_version": null,
+      "availability": "available"
+    }
+  ],
+  "power": {
+    "source": "battery",
+    "ac_present": false,
+    "battery": {
+      "present": true,
+      "charging": false,
+      "charge_percent": 78.0,
+      "energy_full_mwh": 54000,
+      "energy_now_mwh": 42120,
+      "voltage_mv": 12600,
+      "time_remaining_seconds": 7200,
+      "availability": "available"
+    },
+    "availability": "available"
+  },
+  "thermal": [
+    {
+      "id": "cpu-thermal",
+      "temperature_celsius": 52.0,
+      "critical_celsius": 100.0,
+      "availability": "available"
+    }
+  ],
+  "storage": [
+    {
+      "device_id": "nvme0n1",
+      "type": "unknown",
+      "size_bytes": 500107862016,
+      "model": "NVMe SSD",
+      "availability": "available"
+    }
+  ],
+  "displays": [
+    {
+      "id": "eDP-1",
+      "type": "builtin",
+      "width_px": 1920,
+      "height_px": 1080,
+      "refresh_rate_hz": 60.0,
+      "availability": "available"
+    }
+  ],
+  "schema_version": 1
+}

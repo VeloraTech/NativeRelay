@@ -1,0 +1,83 @@
+{
+  "metadata": {
+    "contract_id": "glb-viewer.hardware-profile",
+    "contract_version": "1.0.0",
+    "provider": "NativeRelay",
+    "collected_at": "2026-01-15T12:00:00+00:00",
+    "collector": "native",
+    "platform": "windows",
+    "schema_version": 1
+  },
+  "os": {
+    "name": "Microsoft Windows 11 Pro",
+    "version": "22H2",
+    "architecture": "x86_64",
+    "availability": "available"
+  },
+  "cpu": {
+    "vendor": "intel",
+    "brand": "Intel(R) Core(TM) i7-12700K",
+    "logical_count": 20,
+    "physical_count": 12,
+    "max_frequency_mhz": 3600.0,
+    "availability": "available"
+  },
+  "memory": {
+    "total_bytes": 17179869184,
+    "available_bytes": 8589934592,
+    "usage_percent": 50.0,
+    "availability": "available"
+  },
+  "gpus": [
+    {
+      "vendor": "nvidia",
+      "model": "NVIDIA GeForce RTX 3070",
+      "vram_bytes": 8589934592,
+      "driver_version": "535.98",
+      "availability": "available"
+    }
+  ],
+  "power": {
+    "source": "ac",
+    "ac_present": true,
+    "battery": {
+      "present": false,
+      "charging": null,
+      "charge_percent": null,
+      "energy_full_mwh": null,
+      "energy_now_mwh": null,
+      "voltage_mv": null,
+      "time_remaining_seconds": null,
+      "availability": "not_applicable"
+    },
+    "availability": "available"
+  },
+  "thermal": [
+    {
+      "id": "thermal-0",
+      "temperature_celsius": 45.5,
+      "critical_celsius": 100.0,
+      "availability": "available"
+    }
+  ],
+  "storage": [
+    {
+      "device_id": "NVMe SSD",
+      "type": "nvme",
+      "size_bytes": 500107862016,
+      "model": "Samsung SSD 970 EVO Plus 500GB",
+      "availability": "available"
+    }
+  ],
+  "displays": [
+    {
+      "id": "\\\\.\\DISPLAY1",
+      "type": "builtin",
+      "width_px": 1920,
+      "height_px": 1080,
+      "refresh_rate_hz": 144.0,
+      "availability": "available"
+    }
+  ],
+  "schema_version": 1
+}

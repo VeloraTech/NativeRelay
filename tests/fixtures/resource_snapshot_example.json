@@ -1,0 +1,15 @@
+{
+  "collected_at": "2026-01-15T12:05:00+00:00",
+  "cpu_usage_percent": 23.5,
+  "memory_usage_bytes": 8589934592,
+  "memory_usage_percent": 50.0,
+  "disk_read_bytes_per_sec": null,
+  "disk_write_bytes_per_sec": null,
+  "network_sent_bytes_per_sec": null,
+  "network_recv_bytes_per_sec": null,
+  "battery_charge_percent": 78.0,
+  "battery_charging": false,
+  "temperature_celsius": null,
+  "availability": "available",
+  "schema_version": 1
+}
