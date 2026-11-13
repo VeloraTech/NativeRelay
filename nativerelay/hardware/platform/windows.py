@@ -35,7 +35,6 @@ from .base import HardwareAdapter
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 user32 = ctypes.WinDLL("user32", use_last_error=True)
-powrprof = ctypes.WinDLL("powrprof", use_last_error=True)
 
 
 class _SYSTEM_POWER_STATUS(ctypes.Structure):
@@ -261,7 +260,7 @@ class WindowsHardwareAdapter(HardwareAdapter):
 
     def _collect_power(self) -> PowerInfo:
         status = _SYSTEM_POWER_STATUS()
-        if powrprof.GetSystemPowerStatus(ctypes.byref(status)):
+        if kernel32.GetSystemPowerStatus(ctypes.byref(status)):
             ac_line = status.ACLineStatus
             source = PowerSource.AC if ac_line == 1 else (PowerSource.BATTERY if ac_line == 255 else PowerSource.UNKNOWN)
             battery_flag = status.BatteryFlag

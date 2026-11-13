@@ -6,9 +6,12 @@ Operations:
   - get_provider_info() -> ProviderInfo
 
 Platform-specific collection lives behind adapters; this module imports no
-platform-specific modules.
+platform-specific modules at import time. Platform adapters are lazily
+registered with the default contract on first use.
 """
 from __future__ import annotations
+
+import platform as _platform
 
 from .models import (
     Availability,
@@ -38,15 +41,37 @@ class HardwareContract:
         """Return provider and contract identification."""
         return ProviderInfo()
 
+    def _ensure_adapter(self, target: str) -> None:
+        """Lazily register the platform adapter for the running platform."""
+        if target in self._adapters:
+            return
+        if target == "windows":
+            try:
+                from .platform.windows import WindowsHardwareAdapter
+                self.register_adapter("windows", WindowsHardwareAdapter())
+            except ImportError:
+                pass
+        elif target == "linux":
+            try:
+                from .platform.linux import LinuxHardwareAdapter
+                self.register_adapter("linux", LinuxHardwareAdapter())
+            except ImportError:
+                pass
+        elif target == "darwin":
+            try:
+                from .platform.darwin import DarwinHardwareAdapter
+                self.register_adapter("darwin", DarwinHardwareAdapter())
+            except ImportError:
+                pass
+
     def get_hardware_profile(self, platform: str | None = None) -> HardwareProfile:
         """Collect the static hardware profile for the given platform.
 
         platform defaults to the running platform. Unknown platforms return a
         profile with all subsystems marked unsupported.
         """
-        import platform as _platform
-
         target = (platform or _platform.system().lower())
+        self._ensure_adapter(target)
         adapter = self._adapters.get(target)
         if adapter is None:
             return _unsupported_profile(target)
@@ -58,9 +83,8 @@ class HardwareContract:
         platform defaults to the running platform. Unknown platforms return a
         snapshot with availability=unsupported.
         """
-        import platform as _platform
-
         target = (platform or _platform.system().lower())
+        self._ensure_adapter(target)
         adapter = self._adapters.get(target)
         if adapter is None:
             return _unsupported_snapshot()
