@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.veloratech.dev/nativerelay/hardware-profile/v1.0.0/schema.json",
+  "title": "NativeRelay Hardware Profile",
+  "description": "glb-viewer.hardware-profile v1.0.0 — static hardware profile collected by NativeRelay for GLB Viewer consumption.",
+  "type": "object",
+  "required": ["metadata", "os", "cpu", "memory", "schema_version"],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "required": ["contract_id", "contract_version", "provider", "collected_at", "collector", "platform", "schema_version"],
+      "properties": {
+        "contract_id": { "type": "string", "const": "glb-viewer.hardware-profile" },
+        "contract_version": { "type": "string", "const": "1.0.0" },
+        "provider": { "type": "string", "const": "NativeRelay" },
+        "collected_at": { "type": "string", "format": "date-time" },
+        "collector": { "type": "string" },
+        "platform": { "type": "string" },
+        "schema_version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "os": {
+      "type": "object",
+      "required": ["name", "version", "architecture", "availability"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "architecture": { "type": "string" },
+        "availability": {
+          "type": "string",
+          "enum": ["available", "unavailable", "unsupported", "permission_denied", "not_applicable", "estimated", "error"]
+        }
+      }
+    },
+    "cpu": {
+      "type": "object",
+      "required": ["vendor", "brand", "logical_count", "availability"],
+      "properties": {
+        "vendor": {
+          "type": "string",
+          "enum": ["intel", "amd", "arm", "apple", "qualcomm", "nvidia", "other", "unknown"]
+        },
+        "brand": { "type": "string" },
+        "logical_count": { "type": "integer", "minimum": 1 },
+        "physical_count": { "type": "integer", "minimum": 1 },
+        "max_frequency_mhz": { "type": "number", "minimum": 0 },
+        "availability": {
+          "type": "string",
+          "enum": ["available", "unavailable", "unsupported", "permission_denied", "not_applicable", "estimated", "error"]
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "required": ["total_bytes", "availability"],
+      "properties": {
+        "total_bytes": { "type": "integer", "minimum": 0 },
+        "available_bytes": { "type": "integer", "minimum": 0 },
+        "usage_percent": { "type": "number", "minimum": 0, "maximum": 100 },
+        "availability": {
+          "type": "string",
+          "enum": ["available", "unavailable", "unsupported", "permission_denied", "not_applicable", "estimated", "error"]
+        }
+      }
+    },
+    "gpus": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["vendor", "model", "availability"],
+        "properties": {
+          "vendor": {
+            "type": "string",
+            "enum": ["nvidia", "amd", "intel", "apple", "qualcomm", "other", "unknown"]
+          },
+          "model": { "type": "string" },
+          "vram_bytes": { "type": "integer", "minimum": 0 },
+          "driver_version": { "type": "string" },
+          "availability": {
+            "type": "string",
+            "enum": ["available", "unavailable", "unsupported", "permission_denied", "not_applicable", "estimated", "error"]
+          }
+        }
+      }
+    },
+    "power": {
+      "type": "object",
+      "required": ["source", "availability"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["ac", "battery", "unknown"]
+        },
+        "ac_present": { "type": "boolean" },
+        "battery": {
+          "type": "object",
+          "required": ["present", "availability"],
+          "properties": {
+            "present": { "type": "boolean" },
+            "charging": { "type": "boolean" },
+            "charge_percent": { "type": "number", "minimum": 0, "maximum": 100 },
+            "energy_full_mwh": { "type": "integer", "minimum": 0 },
+            "energy_now_mwh": { "type": "integer", "minimum": 0 },
+            "voltage_mv": { "type": "integer", "minimum": 0 },
+            "time_remaining_seconds": { "type": "integer", "minimum": 0 },
+            "availability": {
+              "type": "string",
+              "enum": ["available", "unavailable", "unsupported", "permission_denied", "not_applicable", "estimated", "error"]
+            }
+          }
+        },
+        "availability": {
+          "type": "string",
+          "enum": ["available", "unavailable", "unsupported", "permission_denied", "not_applicable", "estimated", "error"]
+        }
+      }
+    },
+    "thermal": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "availability"],
+        "properties": {
+          "id": { "type": "string" },
+          "temperature_celsius": { "type": "number" },
+          "critical_celsius": { "type": "number" },
+          "availability": {
+            "type": "string",
+            "enum": ["available", "unavailable", "unsupported", "permission_denied", "not_applicable", "estimated", "error"]
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["device_id", "type", "size_bytes", "availability"],
+        "properties": {
+          "device_id": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": ["hdd", "ssd", "nvme", "emmc", "usb", "other", "unknown"]
+          },
+          "size_bytes": { "type": "integer", "minimum": 0 },
+          "model": { "type": "string" },
+          "availability": {
+            "type": "string",
+            "enum": ["available", "unavailable", "unsupported", "permission_denied", "not_applicable", "estimated", "error"]
+          }
+        }
+      }
+    },
+    "displays": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "width_px", "height_px", "availability"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": ["builtin", "external", "projector", "virtual", "unknown"]
+          },
+          "width_px": { "type": "integer", "minimum": 1 },
+          "height_px": { "type": "integer", "minimum": 1 },
+          "refresh_rate_hz": { "type": "number", "minimum": 0 },
+          "availability": {
+            "type": "string",
+            "enum": ["available", "unavailable", "unsupported", "permission_denied", "not_applicable", "estimated", "error"]
+          }
+        }
+      }
+    },
+    "schema_version": { "type": "integer", "minimum": 1 }
+  },
+  "additionalProperties": false
+}

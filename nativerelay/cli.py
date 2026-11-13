@@ -8,9 +8,11 @@ import platform
 import signal
 import sys
 import threading
+import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 
+from .hardware import get_hardware_profile, get_resource_snapshot
 from .stream import EventStream, StreamClosed
 
 LinuxCollector = None
@@ -50,12 +52,19 @@ def main(argv=None):
                      help="fnmatch pattern for paths to exclude (can be repeated)")
     run.add_argument("--include-command", action="store_true", help="include argv (may contain sensitive data)")
 
+    hardware = commands.add_parser("hardware", help="show hardware profile and resource snapshots")
+    hardware.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    hardware.add_argument("--watch", action="store_true", help="continuously stream dynamic resource snapshots")
+
     args = parser.parse_args(argv)
     if args.command == "run":
         return _run_json(args.scope,
                          include_command=args.include_command,
                          include_paths=args.include_paths or None,
                          exclude_paths=args.exclude_paths or None)
+
+    if args.command == "hardware":
+        return _hardware(args.json, args.watch)
 
     try:
         factory = _platform_collector()
@@ -104,6 +113,129 @@ def main(argv=None):
         return EXIT_OK
     finally:
         collector.stop()
+
+
+def _hardware(emit_json: bool = False, watch: bool = False) -> int:
+    """Display hardware profile or stream dynamic resource snapshots."""
+    if watch:
+        return _hardware_watch(emit_json)
+    try:
+        profile = get_hardware_profile()
+    except Exception as exc:  # noqa: BLE001 - surface collection errors to the user
+        print(f"nativerelay: hardware profile collection failed: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME_FAILURE
+    if emit_json:
+        print(profile.to_json())
+    else:
+        _print_human_profile(profile)
+    return EXIT_OK
+
+
+def _hardware_watch(emit_json: bool = False) -> int:
+    """Continuously stream dynamic resource snapshots until interrupted."""
+    interval = 1.0
+    try:
+        while True:
+            try:
+                snapshot = get_resource_snapshot()
+            except Exception as exc:  # noqa: BLE001 - surface collection errors to the user
+                print(f"nativerelay: resource snapshot failed: {exc}", file=sys.stderr)
+                return EXIT_RUNTIME_FAILURE
+            if emit_json:
+                print(snapshot.to_json(), flush=True)
+            else:
+                _print_human_snapshot(snapshot)
+            try:
+                time.sleep(interval)
+            except KeyboardInterrupt:
+                break
+    except KeyboardInterrupt:
+        pass
+    return EXIT_OK
+
+
+def _print_human_profile(profile) -> None:
+    """Print a human-readable hardware profile."""
+    print(f"Hardware Profile ({profile.metadata.contract_id} v{profile.metadata.contract_version})")
+    print(f"  Platform: {profile.metadata.platform} | Collected: {profile.metadata.collected_at}")
+    print(f"  OS: {profile.os.name} {profile.os.version} ({profile.os.architecture}) [{profile.os.availability.value}]")
+    print(f"  CPU: {profile.cpu.vendor.value} {profile.cpu.brand} "
+          f"({profile.cpu.logical_count} logical" +
+          (f", {profile.cpu.physical_count} physical" if profile.cpu.physical_count else "") +
+          f") [{profile.cpu.availability.value}]")
+    if profile.cpu.max_frequency_mhz is not None:
+        print(f"    Max frequency: {profile.cpu.max_frequency_mhz} MHz")
+    mem = profile.memory
+    print(f"  Memory: {mem.total_bytes / (1024 ** 3):.2f} GB total" +
+          (f", {mem.available_bytes / (1024 ** 3):.2f} GB available" if mem.available_bytes is not None else "") +
+          (f", {mem.usage_percent:.1f}% used" if mem.usage_percent is not None else "") +
+          f" [{mem.availability.value}]")
+    if profile.gpus:
+        print("  GPUs:")
+        for gpu in profile.gpus:
+            vram = f", {gpu.vram_bytes / (1024 ** 3):.2f} GB VRAM" if gpu.vram_bytes is not None else ""
+            print(f"    {gpu.vendor.value} {gpu.model}{vram} [{gpu.availability.value}]")
+    else:
+        print("  GPUs: none")
+    if profile.power:
+        bat = profile.power.battery
+        bat_str = ""
+        if bat:
+            bat_str = (
+                (f", charge={bat.charge_percent}%" if bat.charge_percent is not None else "")
+                + (f", charging={bat.charging}" if bat.charging is not None else "")
+            )
+        print(f"  Power: {profile.power.source.value}, AC={profile.power.ac_present}{bat_str} "
+              f"[{profile.power.availability.value}]")
+    else:
+        print("  Power: unavailable")
+    if profile.thermal:
+        print("  Thermal:")
+        for zone in profile.thermal:
+            temp = f"{zone.temperature_celsius}°C" if zone.temperature_celsius is not None else "n/a"
+            print(f"    {zone.id}: {temp} [{zone.availability.value}]")
+    else:
+        print("  Thermal: none")
+    if profile.storage:
+        print("  Storage:")
+        for dev in profile.storage:
+            print(f"    {dev.device_id} ({dev.type.value}, {dev.size_bytes / (1024 ** 3):.2f} GB) [{dev.availability.value}]")
+    else:
+        print("  Storage: none")
+    if profile.displays:
+        print("  Displays:")
+        for disp in profile.displays:
+            refresh = f", {disp.refresh_rate_hz} Hz" if disp.refresh_rate_hz is not None else ""
+            print(f"    {disp.id} ({disp.type.value}, {disp.width_px}x{disp.height_px}{refresh}) [{disp.availability.value}]")
+    else:
+        print("  Displays: none")
+
+
+def _print_human_snapshot(snapshot) -> None:
+    """Print a single human-readable resource snapshot line."""
+    parts = [f"collected_at={snapshot.collected_at}"]
+    if snapshot.cpu_usage_percent is not None:
+        parts.append(f"cpu={snapshot.cpu_usage_percent:.1f}%")
+    if snapshot.memory_usage_percent is not None:
+        parts.append(f"mem={snapshot.memory_usage_percent:.1f}%")
+    if snapshot.memory_usage_bytes is not None:
+        parts.append(f"mem_bytes={snapshot.memory_usage_bytes}")
+    if snapshot.disk_read_bytes_per_sec is not None:
+        parts.append(f"disk_read={snapshot.disk_read_bytes_per_sec:.1f} B/s")
+    if snapshot.disk_write_bytes_per_sec is not None:
+        parts.append(f"disk_write={snapshot.disk_write_bytes_per_sec:.1f} B/s")
+    if snapshot.network_sent_bytes_per_sec is not None:
+        parts.append(f"net_sent={snapshot.network_sent_bytes_per_sec:.1f} B/s")
+    if snapshot.network_recv_bytes_per_sec is not None:
+        parts.append(f"net_recv={snapshot.network_recv_bytes_per_sec:.1f} B/s")
+    if snapshot.battery_charge_percent is not None:
+        parts.append(f"battery={snapshot.battery_charge_percent:.1f}%")
+    if snapshot.battery_charging is not None:
+        parts.append(f"charging={snapshot.battery_charging}")
+    if snapshot.temperature_celsius is not None:
+        parts.append(f"temp={snapshot.temperature_celsius}°C")
+    parts.append(f"availability={snapshot.availability.value}")
+    print(" | ".join(parts), flush=True)
 
 
 def _run_json(scope, *, include_command=False, include_paths=None, exclude_paths=None,

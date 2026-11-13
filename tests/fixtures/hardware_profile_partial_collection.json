@@ -1,0 +1,38 @@
+{
+  "metadata": {
+    "contract_id": "glb-viewer.hardware-profile",
+    "contract_version": "1.0.0",
+    "provider": "NativeRelay",
+    "collected_at": "2026-01-15T12:00:00+00:00",
+    "collector": "native",
+    "platform": "linux",
+    "schema_version": 1
+  },
+  "os": {
+    "name": "unknown",
+    "version": "unknown",
+    "architecture": "unknown",
+    "availability": "unavailable"
+  },
+  "cpu": {
+    "vendor": "unknown",
+    "brand": "unknown",
+    "logical_count": 1,
+    "availability": "unavailable"
+  },
+  "memory": {
+    "total_bytes": 0,
+    "availability": "unavailable"
+  },
+  "gpus": [],
+  "power": {
+    "source": "unknown",
+    "ac_present": null,
+    "battery": null,
+    "availability": "unavailable"
+  },
+  "thermal": [],
+  "storage": [],
+  "displays": [],
+  "schema_version": 1
+}
